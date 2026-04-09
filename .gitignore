@@ -1,6 +1,6 @@
 *.o
 *.out
 *.bin
-*.forge
+forge
 .forge
 .forgeignore

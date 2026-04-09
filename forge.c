@@ -732,7 +732,10 @@ static int cmd_list_objects(int argc, char *argv[])
     for (int i = 0; i < cnt; i++) {
         printf("%s\n", sha1s[i]);
         free(sha1s[i]);
- 
+    }
+      free(sha1s);
+    return 0;
+} 
 
 
 static void usage(void)
