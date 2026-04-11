@@ -9,21 +9,28 @@
  * Author: Shahriar Dhrubo
  *
  *  Commands:
- *    forge init              — initialise a new repository
- *    forge put <files>       — stage files          (kinda like git add)
- *    forge put -a            — stage all files
- *    forge msg -m <text>     — commit staged files  (awa git commit)
- *    forge status            — show working tree status
- *    forge log               — show commit history
- *    forge diff              — diff working tree vs index
- *    forge branch [<n>]      — list or create branches
- *    forge branch -d <n>     — delete a branch
- *    forge checkout <branch> — switch branch
- *    forge remote add <n> <url> — add a named remote
- *    forge remote list       — list remotes
- *    forge shoot [<remote>]  — push to remote       (awa git push)
- *    forge fetch [<remote>]  — fetch from remote    (awa git pull)
- *    forge cat-obj <sha1>    — dump an object (debug)
+ *    forge init                         — initialise a new repository
+ *    forge put <files> | -a             — stage files          (awa git add)
+ *    forge msg -m <text>                — commit staged files  (awa git commit)
+ *    forge status                       — show working tree status
+ *    forge log [--oneline]              — show commit history
+ *    forge show [<sha1>]                — inspect a commit or object
+ *    forge diff                         — diff staged vs working tree
+ *    forge branch [<n>]                 — list or create branches
+ *    forge branch -d <n>                — delete a branch
+ *    forge checkout <branch>            — switch branch
+ *    forge rm <file>                    — remove file from index + working tree
+ *    forge reset [--soft|--hard] <sha1> — reset HEAD
+ *    forge tag <n> [<sha1>]          — create a lightweight tag
+ *    forge tag -l                       — list tags
+ *    forge clone <url> [<dir>]          — clone a remote repository
+ *    forge remote add <n> <url>         — add a named remote
+ *    forge remote list                  — list remotes
+ *    forge shoot [<remote>] [<branch>]  — push to remote  (awa git push)
+ *    forge fetch [<remote>] [<branch>]  — fetch from remote  (awa git pull)
+ *    forge serve [--port <n>]           — serve repo over TCP (awa git daemon)
+ *    forge cat-obj <sha1>               — dump raw object (debug)
+ *    forge hash-obj <file>              — hash a file without storing
  *
  *  Author/identity read from .forge/config:
  *    [user]
@@ -45,10 +52,14 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <time.h>
 #include <errno.h>
+#include <signal.h>
 
 void die(const char *fmt, ...)
 {
@@ -103,13 +114,29 @@ int read_file(const char *path, uint8_t **buf, size_t *len)
     return 0;
 }
 
+int read_file(const char *path, uint8_t **buf, size_t *len)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    struct stat st;
+    fstat(fd, &st);
+    *buf = malloc((size_t)st.st_size + 1);
+    if (!*buf) { close(fd); return -1; }
+    ssize_t n = read(fd, *buf, (size_t)st.st_size);
+    close(fd);
+    if (n < 0) { free(*buf); return -1; }
+    (*buf)[n] = '\0';
+    *len = (size_t)n;
+    return 0;
+}
+
 int write_file(const char *path, const uint8_t *buf, size_t len)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return -1;
-    write(fd, buf, len);
+    ssize_t n = write(fd, buf, len);
     close(fd);
-    return 0;
+    return (n == (ssize_t)len) ? 0 : -1;
 }
 
 int write_file_str(const char *path, const char *str)
@@ -133,25 +160,22 @@ int is_forge_repo(void)
 void forge_find_root(char *out, size_t size)
 {
     char cwd[MAX_PATH_LEN];
-    getcwd(cwd, sizeof(cwd));
+    if (!getcwd(cwd, sizeof(cwd))) { snprintf(out, size, "."); return; }
     snprintf(out, size, "%s", cwd);
-    // Walk up until we find .forge 
     while (1) {
         char check[MAX_PATH_LEN];
         snprintf(check, sizeof(check), "%s/.forge", out);
         struct stat st;
         if (stat(check, &st) == 0 && S_ISDIR(st.st_mode)) return;
-        // Go up one level 
         char *slash = strrchr(out, '/');
         if (!slash || slash == out) break;
         *slash = '\0';
     }
-    snprintf(out, size, "%s", cwd);//if fallback: stay in cwd
+    snprintf(out, size, "%s", cwd);
 }
 
 
-static void config_get(const char *key, char *out, size_t size,
-                       const char *def)
+static void config_get(const char *key, char *out, size_t size, const char *def)
 {
     snprintf(out, size, "%s", def);
     FILE *f = fopen(FORGE_CONFIG, "r");
@@ -159,15 +183,12 @@ static void config_get(const char *key, char *out, size_t size,
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         rtrim(line);
-        
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
-      
         if (strncmp(p, key, strlen(key)) == 0) {
             char *eq = strchr(p, '=');
             if (eq) {
-                eq++;
-                while (*eq == ' ') eq++;
+                eq++; while (*eq == ' ') eq++;
                 snprintf(out, size, "%s", eq);
                 break;
             }
@@ -176,88 +197,158 @@ static void config_get(const char *key, char *out, size_t size,
     fclose(f);
 }
 
+static void parse_commit(const char *data, size_t len,
+                         char tree[SHA1_HEX_SIZE],
+                         char parent[SHA1_HEX_SIZE],
+                         char author[512],
+                         char *message, size_t msg_size)
+{
+    tree[0] = parent[0] = author[0] = message[0] = '\0';
+    const char *p = data, *end = data + len;
+
+    while (p < end) {
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        if (!nl) nl = end;
+        size_t llen = (size_t)(nl - p);
+
+        if (llen == 0) {
+            p = nl + 1;
+            size_t mlen = (size_t)(end - p);
+            if (mlen >= msg_size) mlen = msg_size - 1;
+            memcpy(message, p, mlen);
+            message[mlen] = '\0';
+            rtrim(message);
+            break;
+        }
+
+        char line[1024];
+        size_t copy = llen < sizeof(line) - 1 ? llen : sizeof(line) - 1;
+        memcpy(line, p, copy); line[copy] = '\0';
+
+        if (strncmp(line, "tree ", 5) == 0)
+            snprintf(tree, SHA1_HEX_SIZE, "%.40s", line + 5);
+        else if (strncmp(line, "parent ", 7) == 0)
+            snprintf(parent, SHA1_HEX_SIZE, "%.40s", line + 7);
+        else if (strncmp(line, "author ", 7) == 0)
+            snprintf(author, 512, "%.510s", line + 7);
+        p = nl + 1;
+    }
+}
+
+static void hash_wt_file(const char *path, char sha1_out[SHA1_HEX_SIZE])
+{
+    sha1_out[0] = '\0';
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return;
+    struct stat st; fstat(fd, &st);
+    uint8_t *data = malloc((size_t)st.st_size + 1);
+    if (!data) { close(fd); return; }
+    ssize_t n = read(fd, data, (size_t)st.st_size);
+    close(fd);
+    if (n >= 0) obj_hash(data, (size_t)n, OBJ_BLOB, sha1_out);
+    free(data);
+}
+
+static void flatten_tree(const char *tree_sha, const char *prefix,
+                         IndexEntry **out, int *cnt, int *cap)
+{
+    TreeEntry *entries; int ecnt;
+    if (tree_read(tree_sha, &entries, &ecnt) != 0) return;
+    for (int i = 0; i < ecnt; i++) {
+        char full[MAX_PATH_LEN];
+        if (prefix[0])
+            snprintf(full, sizeof(full), "%s/%s", prefix, entries[i].name);
+        else
+            snprintf(full, sizeof(full), "%s", entries[i].name);
+
+        if (entries[i].mode == MODE_DIR) {
+            flatten_tree(entries[i].sha1, full, out, cnt, cap);
+        } else {
+            if (*cnt >= *cap) {
+                *cap *= 2;
+                IndexEntry *tmp = realloc(*out, (size_t)*cap * sizeof(IndexEntry));
+                if (!tmp) { free(entries); return; }
+                *out = tmp;
+            }
+            (*out)[*cnt].mode = entries[i].mode;
+            snprintf((*out)[*cnt].sha1, SHA1_HEX_SIZE, "%s", entries[i].sha1);
+            snprintf((*out)[*cnt].path, MAX_PATH_LEN, "%s", full);
+            (*cnt)++;
+        }
+    }
+    free(entries);
+}
+
+static IndexEntry *get_committed_files(const char *commit_sha, int *cnt_out)
+{
+    int cap = 256; *cnt_out = 0;
+    IndexEntry *committed = malloc((size_t)cap * sizeof(IndexEntry));
+    if (!committed) return NULL;
+    if (!commit_sha || !commit_sha[0]) return committed;
+
+    ObjType type; uint8_t *data; size_t dlen;
+    if (obj_read(commit_sha, &type, &data, &dlen) != 0) return committed;
+    if (type != OBJ_COMMIT) { free(data); return committed; }
+
+    char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE], author[512], msg[4096];
+    parse_commit((char *)data, dlen, tree, parent, author, msg, sizeof(msg));
+    free(data);
+    if (tree[0]) flatten_tree(tree, "", &committed, cnt_out, &cap);
+    return committed;
+}
 
 static int cmd_init(int argc, char *argv[])
 {
     const char *dir = (argc > 0) ? argv[0] : ".";
-
     if (strcmp(dir, ".") != 0) {
         if (mkdir(dir, 0755) != 0 && errno != EEXIST)
-            die("cannot create directory '%s': %s", dir, strerror(errno));
-        if (chdir(dir) != 0)
-            die("cannot enter '%s'", dir);
+            die("cannot create '%s': %s", dir, strerror(errno));
+        if (chdir(dir) != 0) die("cannot enter '%s'", dir);
     }
-
     if (is_forge_repo()) {
-        printf("forge: repository already exists at %s\n", FORGE_DIR);
+        printf("forge: repository already initialised at %s\n", FORGE_DIR);
         return 0;
     }
 
-    /* Create directory skeleton */
     const char *dirs[] = {
         FORGE_DIR, FORGE_OBJECTS, FORGE_REFS,
         FORGE_HEADS, ".forge/refs/tags", NULL
     };
-    for (int i = 0; dirs[i]; i++) {
+    for (int i = 0; dirs[i]; i++)
         if (mkdir(dirs[i], 0755) != 0)
-            die("mkdir '%s' failed: %s", dirs[i], strerror(errno));
-    }
+            die("mkdir '%s': %s", dirs[i], strerror(errno));
 
-    /* HEAD → refs/heads/main */
     write_file_str(FORGE_HEAD, "ref: refs/heads/main\n");
-
-    /* Description */
-    write_file_str(FORGE_DESCRIPTION,
-                   "Unnamed FORGE repository. Edit this file to name it.\n");
-
-    /* Default config */
+    write_file_str(FORGE_DESCRIPTION, "Unnamed FORGE repository.\n");
     write_file_str(FORGE_CONFIG,
-                   "[core]\n"
-                   "    repositoryformatversion = 0\n"
-                   "    filemode = true\n"
-                   "\n"
-                   "[user]\n"
-                   "    name  = Anonymous\n"
-                   "    email = anon@forge.local\n");
-
-    /* Default .forgeignore */
-    if (access(".forgeignore", F_OK) != 0) {
+                   "[core]\n    repositoryformatversion = 0\n    filemode = true\n"
+                   "\n[user]\n    name  = Anonymous\n    email = anon@forge.local\n");
+    if (access(".forgeignore", F_OK) != 0)
         write_file_str(".forgeignore",
-                       "# Files and patterns ignored by forge\n"
-                       ".forge\n"
-                       "*.o\n"
-                       "*.a\n"
-                       "*.so\n"
-                       "*.d\n");
-    }
+                       "# FORGE ignore file\n.forge\n*.o\n*.a\n*.so\n");
 
     char cwd[MAX_PATH_LEN];
-    getcwd(cwd, sizeof(cwd));
-    printf("Initialised empty FORGE repository at %s/.forge/\n", cwd);
-    printf("Edit %s to set your name and email.\n", FORGE_CONFIG);
+    if (!getcwd(cwd, sizeof(cwd))) snprintf(cwd, sizeof(cwd), ".");
+    printf("Initialised empty FORGE repository at \033[1m%s/.forge/\033[0m\n", cwd);
+    printf("Edit \033[90m%s\033[0m to set your name and email.\n", FORGE_CONFIG);
     return 0;
 }
 
 
 static int cmd_put(int argc, char *argv[])
 {
-    if (!is_forge_repo()) die("not a forge repository (missing .forge)");
-
+    if (!is_forge_repo()) die("not a forge repository");
     if (argc == 0) {
-        fprintf(stderr, "usage: forge put <file> [files...]\n"
-                        "       forge put -a\n");
+        fprintf(stderr, "usage: forge put <file> [...]\n       forge put -a\n");
         return 1;
     }
-
     if (argc == 1 && strcmp(argv[0], "-a") == 0) {
         printf("Staging all files...\n");
         return index_add_all();
     }
-
     int rc = 0;
-    for (int i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; i++)
         if (index_add(argv[i]) != 0) rc = 1;
-    }
     return rc;
 }
 
@@ -265,55 +356,57 @@ static int cmd_put(int argc, char *argv[])
 static int cmd_msg(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
-
     char message[4096] = "";
-
-    for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
+    for (int i = 0; i < argc; i++)
+        if (strcmp(argv[i], "-m") == 0 && i + 1 < argc)
             snprintf(message, sizeof(message), "%s", argv[++i]);
-        }
-    }
+
     if (!message[0]) {
-        fprintf(stderr, "usage: forge msg -m \"your commit message\"\n");
+        fprintf(stderr, "usage: forge msg -m \"commit message\"\n");
         return 1;
     }
 
-    /* Read index */
-    IndexEntry *entries; int cnt;
-    if (index_read(&entries, &cnt) != 0) die("cannot read index");
-    if (cnt == 0) {
-        fprintf(stderr, "forge: nothing staged — use 'forge put' first\n");
-        free(entries);
-        return 1;
+    /* Read staged (newly changed) files from index */
+    IndexEntry *staged; int staged_cnt;
+    if (index_read(&staged, &staged_cnt) != 0) die("cannot read index");
+    if (staged_cnt == 0) {
+        fprintf(stderr, "forge: nothing staged \xe2\x80\x94 use '\033[1mforge put\033[0m' first\n");
+        free(staged); return 1;
     }
 
-    /* Build root tree */
+    char parent_sha1[SHA1_HEX_SIZE] = "";
+    head_resolve(parent_sha1);
+
+    /* Merge: parent snapshot + staged overrides = new full snapshot */
+    int parent_cnt;
+    IndexEntry *parent_files = get_committed_files(parent_sha1[0] ? parent_sha1 : NULL, &parent_cnt);
+    int merged_cap = parent_cnt + staged_cnt + 1;
+    IndexEntry *entries = malloc((size_t)merged_cap * sizeof(IndexEntry));
+    if (!entries) die("out of memory");
+    int cnt = 0;
+    for (int i = 0; i < parent_cnt; i++) {
+        int overridden = 0;
+        for (int j = 0; j < staged_cnt; j++)
+            if (strcmp(parent_files[i].path, staged[j].path) == 0) { overridden = 1; break; }
+        if (!overridden) entries[cnt++] = parent_files[i];
+    }
+    for (int i = 0; i < staged_cnt; i++) entries[cnt++] = staged[i];
+    free(parent_files);
+
     char tree_sha1[SHA1_HEX_SIZE];
     if (tree_build_from_index(entries, cnt, "", tree_sha1) != 0)
         die("failed to build tree object");
 
-    /* Get parent commit */
-    char parent_sha1[SHA1_HEX_SIZE] = "";
-    head_resolve(parent_sha1);   /* empty string if first commit */
-
-    /* Get author/committer identity */
     char author_name[256], author_email[256];
     config_get("name",  author_name,  sizeof(author_name),  "Anonymous");
     config_get("email", author_email, sizeof(author_email), "anon@forge.local");
 
-    /* Timestamp */
     time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-    char ts[64];
-    #pragma GCC diagnostic push
-    #pragma GCC diagnostic ignored "-Wformat"
-    strftime(ts, sizeof(ts), "%s %z", tm);
-    #pragma GCC diagnostic pop
+    struct tm *tm_local = localtime(&now);
+    char tz[8]; strftime(tz, sizeof(tz), "%z", tm_local);
+    char ts[64]; snprintf(ts, sizeof(ts), "%ld %s", (long)now, tz);
 
-    /* Build commit object text */
-    char commit_buf[8192];
-    int  commit_len = 0;
-
+    char commit_buf[8192]; int commit_len = 0;
     commit_len += snprintf(commit_buf + commit_len,
                            sizeof(commit_buf) - (size_t)commit_len,
                            "tree %s\n", tree_sha1);
@@ -321,56 +414,53 @@ static int cmd_msg(int argc, char *argv[])
         commit_len += snprintf(commit_buf + commit_len,
                                sizeof(commit_buf) - (size_t)commit_len,
                                "parent %s\n", parent_sha1);
-
     commit_len += snprintf(commit_buf + commit_len,
                            sizeof(commit_buf) - (size_t)commit_len,
                            "author %s <%s> %s\n"
-                           "committer %s <%s> %s\n"
-                           "\n"
-                           "%s\n",
+                           "committer %s <%s> %s\n\n%s\n",
                            author_name, author_email, ts,
-                           author_name, author_email, ts,
-                           message);
+                           author_name, author_email, ts, message);
 
     char commit_sha1[SHA1_HEX_SIZE];
     if (obj_write((uint8_t *)commit_buf, (size_t)commit_len,
                   OBJ_COMMIT, commit_sha1) != 0)
         die("failed to write commit object");
 
-    /* Advance HEAD */
-    if (head_advance(commit_sha1) != 0)
-        die("failed to update HEAD");
-
-    /* Clear index */
-    write_file_str(FORGE_INDEX, "");
-
+    if (head_advance(commit_sha1) != 0) die("failed to update HEAD");
+    /* Write full committed snapshot back to index so next commit sees all tracked files */
+    index_write(entries, cnt);
+    free(staged);
     free(entries);
 
-    printf("[%s] %s\n", commit_sha1 + 0, message);
+    char branch[256] = "main"; head_branch(branch);
+    printf("[\033[33m%.8s\033[0m] (\033[1m%s\033[0m) %s\n",
+           commit_sha1, branch, message);
     printf("  tree:   %s\n", tree_sha1);
-    if (parent_sha1[0])
-        printf("  parent: %s\n", parent_sha1);
-    printf("  %d file%s staged\n", cnt, cnt == 1 ? "" : "s");
+    if (parent_sha1[0]) printf("  parent: %.8s...\n", parent_sha1);
+    printf("  \033[32m%d file%s committed\033[0m\n", cnt, cnt == 1 ? "" : "s");
     return 0;
 }
+
 static void collect_files(const char *dir, char **list, int *cnt, int cap)
 {
-    DIR *d = opendir(dir[0] ? dir : ".");
+    const char *open_dir = (dir[0] && strcmp(dir, ".") != 0) ? dir : ".";
+    DIR *d = opendir(open_dir);
     if (!d) return;
     struct dirent *de;
     while ((de = readdir(d)) && *cnt < cap) {
         if (de->d_name[0] == '.') continue;
         char path[MAX_PATH_LEN];
-        snprintf(path, sizeof(path),
-                 "%s%s%s", dir[0] ? dir : "", dir[0] ? "/" : "", de->d_name);
+        if (dir[0] && strcmp(dir, ".") != 0)
+            snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
+        else
+            snprintf(path, sizeof(path), "%s", de->d_name);
         if (is_ignored(path)) continue;
         struct stat st;
         if (stat(path, &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) {
+        if (S_ISDIR(st.st_mode))
             collect_files(path, list, cnt, cap);
-        } else if (S_ISREG(st.st_mode)) {
+        else if (S_ISREG(st.st_mode))
             list[(*cnt)++] = xstrdup(path);
-        }
     }
     closedir(d);
 }
@@ -380,73 +470,81 @@ static int cmd_status(int argc, char *argv[])
     (void)argc; (void)argv;
     if (!is_forge_repo()) die("not a forge repository");
 
-    /* Branch info */
     char branch[256] = "(detached)";
     head_branch(branch);
     printf("On branch \033[1m%s\033[0m\n", branch);
 
-    /* Staged files */
     IndexEntry *idx; int idx_cnt;
     if (index_read(&idx, &idx_cnt) != 0) die("cannot read index");
 
-    /* Last commit's tree (to detect what changed) */
     char head_sha1[SHA1_HEX_SIZE] = "";
     head_resolve(head_sha1);
+    int committed_cnt;
+    IndexEntry *committed = get_committed_files(head_sha1, &committed_cnt);
 
+    /* Staged changes */
     if (idx_cnt > 0) {
-        printf("\nChanges to be committed (staged):\n");
-        printf("  \033[32m(use 'forge msg -m \"...\"' to commit)\033[0m\n\n");
-        for (int i = 0; i < idx_cnt; i++)
-            printf("  \033[32mstaged:   %s\033[0m\n", idx[i].path);
-    } else {
-        printf("\nNothing staged.\n");
+        printf("\nChanges staged for commit:\n");
+        printf("  \033[90m(use 'forge msg -m \"...\"' to commit)\033[0m\n\n");
+        for (int i = 0; i < idx_cnt; i++) {
+            IndexEntry *prev = index_find(committed, committed_cnt, idx[i].path);
+            printf("  \033[32m%-10s %s\033[0m\n",
+                   prev ? "modified:" : "new file:", idx[i].path);
+        }
     }
 
-    /* Unstaged changes: walk working tree, compare against index */
+    /* Working tree changes */
     char *wt_files[MAX_ENTRIES]; int wt_cnt = 0;
-    collect_files("", wt_files, &wt_cnt, MAX_ENTRIES);
+    collect_files(".", wt_files, &wt_cnt, MAX_ENTRIES);
 
-    int has_unstaged = 0;
+    int n_mod = 0, n_unt = 0, n_del = 0;
+
     for (int i = 0; i < wt_cnt; i++) {
         const char *p = wt_files[i];
-        IndexEntry *e = index_find(idx, idx_cnt, p);
-
-        /* Hash working tree file to compare */
+        IndexEntry *staged    = index_find(idx, idx_cnt, p);
+        IndexEntry *committed_e = index_find(committed, committed_cnt, p);
         char wt_sha1[SHA1_HEX_SIZE];
-        obj_hash(NULL, 0, OBJ_BLOB, wt_sha1);   /* placeholder */
+        hash_wt_file(p, wt_sha1);
 
-        /* Re hash file without writing */
-        int fd = open(p, O_RDONLY);
-        if (fd < 0) { free(wt_files[i]); continue; }
-        struct stat st; fstat(fd, &st);
-        uint8_t *data = malloc((size_t)st.st_size);
-        read(fd, data, (size_t)st.st_size);
-        close(fd);
-        obj_hash(data, (size_t)st.st_size, OBJ_BLOB, wt_sha1);
-        free(data);
-
-        if (!e) {
-            if (!has_unstaged) {
-                printf("\nUntracked files:\n");
-                printf("  \033[31m(use 'forge put <file>' to stage)\033[0m\n\n");
-                has_unstaged = 1;
+        if (staged) {
+            if (wt_sha1[0] && strcmp(staged->sha1, wt_sha1) != 0) {
+                if (n_mod++ == 0)
+                    printf("\nModified after staging "
+                           "\033[90m(re-run 'forge put' to restage)\033[0m:\n\n");
+                printf("  \033[33mmodified:  %s\033[0m\n", p);
             }
+        } else if (committed_e) {
+            if (wt_sha1[0] && strcmp(committed_e->sha1, wt_sha1) != 0) {
+                if (n_mod++ == 0)
+                    printf("\nNot staged for commit "
+                           "\033[90m(use 'forge put' to stage)\033[0m:\n\n");
+                printf("  \033[33mmodified:  %s\033[0m\n", p);
+            }
+        } else {
+            if (n_unt++ == 0)
+                printf("\nUntracked files "
+                       "\033[90m(use 'forge put <file>' to track)\033[0m:\n\n");
             printf("  \033[31muntracked: %s\033[0m\n", p);
-        } else if (strcmp(e->sha1, wt_sha1) != 0) {
-            /* Modified after staging */
-            if (!has_unstaged) {
-                printf("\nModified but not re-staged:\n");
-                has_unstaged = 1;
-            }
-            printf("  \033[33mmodified:  %s\033[0m\n", p);
         }
         free(wt_files[i]);
     }
 
-    if (idx_cnt == 0 && !has_unstaged)
-        printf("  nothing to commit, working tree clean\n");
+    /* Deleted committed files */
+    for (int i = 0; i < committed_cnt; i++) {
+        /* Skip if currently staged (user already handled it) */
+        if (index_find(idx, idx_cnt, committed[i].path)) continue;
+        if (access(committed[i].path, F_OK) != 0) {
+            if (n_del++ == 0)
+                printf("\nDeleted "
+                       "\033[90m(use 'forge rm' to stage removal)\033[0m:\n\n");
+            printf("  \033[31mdeleted:   %s\033[0m\n", committed[i].path);
+        }
+    }
 
-    free(idx);
+    if (idx_cnt == 0 && n_mod == 0 && n_unt == 0 && n_del == 0)
+        printf("\n  \033[32mnothing to commit, working tree clean\033[0m\n");
+
+    free(idx); free(committed);
     return 0;
 }
 
@@ -493,46 +591,105 @@ static void parse_commit(const char *data, size_t len,
     }
 }
 
+
 static int cmd_log(int argc, char *argv[])
 {
-    (void)argc; (void)argv;
     if (!is_forge_repo()) die("not a forge repository");
+    int oneline = 0;
+    for (int i = 0; i < argc; i++)
+        if (strcmp(argv[i], "--oneline") == 0) oneline = 1;
 
     char sha1[SHA1_HEX_SIZE];
     if (head_resolve(sha1) != 0 || !sha1[0]) {
-        printf("forge: no commits yet\n");
-        return 0;
+        printf("forge: no commits yet\n"); return 0;
     }
-
-    int oneline = (argc > 0 && strcmp(argv[0], "--oneline") == 0);
 
     while (sha1[0]) {
         ObjType type; uint8_t *data; size_t dlen;
-        if (obj_read(sha1, &type, &data, &dlen) != 0)
-            die("cannot read commit %s", sha1);
-        if (type != OBJ_COMMIT) die("expected commit object");
+        if (obj_read(sha1, &type, &data, &dlen) != 0) break;
+        if (type != OBJ_COMMIT) { free(data); break; }
 
         char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
         char author[512], message[4096];
         parse_commit((char *)data, dlen, tree, parent, author, message, sizeof(message));
         free(data);
 
-        if (oneline) {
+        if (oneline)
             printf("\033[33m%.8s\033[0m %s\n", sha1, message);
-        } else {
+        else {
             printf("\033[33mcommit %s\033[0m\n", sha1);
-            printf("Author: %s\n", author);
-            printf("\n    %s\n\n", message);
+            printf("Author: %s\n\n    %s\n\n", author, message);
         }
+        if (parent[0]) snprintf(sha1, SHA1_HEX_SIZE, "%s", parent);
+        else sha1[0] = '\0';
+    }
+    return 0;
+}
 
-        if (parent[0]) {
-            snprintf(sha1, SHA1_HEX_SIZE, "%s", parent);
-        } else {
-            sha1[0] = '\0';
+static int cmd_show(int argc, char *argv[])
+{
+    if (!is_forge_repo()) die("not a forge repository");
+    char sha1[SHA1_HEX_SIZE];
+    if (argc < 1) {
+        if (head_resolve(sha1) != 0 || !sha1[0]) {
+            fprintf(stderr, "forge: no commits yet\n"); return 1;
+        }
+    } else {
+        snprintf(sha1, SHA1_HEX_SIZE, "%.40s", argv[0]);
+    }
+
+    ObjType type; uint8_t *data; size_t dlen;
+    if (obj_read(sha1, &type, &data, &dlen) != 0) {
+        fprintf(stderr, "forge: object %s not found\n", sha1);
+        return 1;
+    }
+
+    if (type == OBJ_COMMIT) {
+        char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
+        char author[512], message[4096];
+        parse_commit((char *)data, dlen, tree, parent, author, message, sizeof(message));
+        free(data);
+
+        printf("\033[33mcommit %s\033[0m\n", sha1);
+        if (parent[0]) printf("Parent: %s\n", parent);
+        printf("Author: %s\nTree:   %s\n\n    %s\n\n", author, tree, message);
+
+        int parent_cnt = 0, this_cnt = 0;
+        IndexEntry *parent_files = get_committed_files(parent[0] ? parent : NULL, &parent_cnt);
+        IndexEntry *this_files   = get_committed_files(sha1, &this_cnt);
+
+        for (int i = 0; i < this_cnt; i++) {
+            IndexEntry *p = index_find(parent_files, parent_cnt, this_files[i].path);
+            if (!p)
+                printf("  \033[32m+++ %s  (new file)\033[0m\n", this_files[i].path);
+            else if (strcmp(p->sha1, this_files[i].sha1) != 0)
+                printf("  \033[33m~~~ %s  (modified)\033[0m\n", this_files[i].path);
+        }
+        for (int i = 0; i < parent_cnt; i++) {
+            if (!index_find(this_files, this_cnt, parent_files[i].path))
+                printf("  \033[31m--- %s  (deleted)\033[0m\n", parent_files[i].path);
+        }
+        free(parent_files); free(this_files);
+
+    } else if (type == OBJ_BLOB) {
+        printf("blob %s (%zu bytes)\n\n", sha1, dlen);
+        fwrite(data, 1, dlen, stdout);
+        if (dlen > 0 && data[dlen-1] != '\n') putchar('\n');
+        free(data);
+    } else if (type == OBJ_TREE) {
+        free(data);
+        printf("tree %s\n\n", sha1);
+        TreeEntry *entries; int cnt;
+        if (tree_read(sha1, &entries, &cnt) == 0) {
+            for (int i = 0; i < cnt; i++)
+                printf("  %06o  %s  %s\n",
+                       entries[i].mode, entries[i].sha1, entries[i].name);
+            free(entries);
         }
     }
     return 0;
 }
+
 
 static void run_diff(const char *label, const char *blob_sha,
                      uint32_t mode, const char *wt_path)
