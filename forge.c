@@ -534,43 +534,49 @@ static int cmd_log(int argc, char *argv[])
     return 0;
 }
 
+static void run_diff(const char *label, const char *blob_sha,
+                     uint32_t mode, const char *wt_path)
+{
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "/tmp/forge_diff_%d", getpid());
+    blob_to_file(blob_sha, tmp, mode);
+    char cmd[MAX_PATH_LEN * 2];
+    if (access(wt_path, F_OK) == 0)
+        snprintf(cmd, sizeof(cmd),
+                 "diff --label 'a/%s' --label 'b/%s' -u '%s' '%s'",
+                 label, label, tmp, wt_path);
+    else
+        snprintf(cmd, sizeof(cmd),
+                 "diff --label 'a/%s' --label 'b/%s' -u '%s' /dev/null",
+                 label, label, tmp);
+    if (system(cmd) < 0)
+        fprintf(stderr, "forge: diff failed for %s\n", label);
+    unlink(tmp);
+}
 
 static int cmd_diff(int argc, char *argv[])
 {
     (void)argc; (void)argv;
     if (!is_forge_repo()) die("not a forge repository");
-
+ 
     IndexEntry *idx; int idx_cnt;
     if (index_read(&idx, &idx_cnt) != 0) die("cannot read index");
-
-    if (idx_cnt == 0) {
-        printf("forge: nothing staged to diff against\n");
-        free(idx);
-        return 0;
-    }
-
-    for (int i = 0; i < idx_cnt; i++) {
-        /* Write staged blob to a temp file */
-        char tmp_staged[64];
-        snprintf(tmp_staged, sizeof(tmp_staged), "/tmp/forge_a_%d", getpid());
-        blob_to_file(idx[i].sha1, tmp_staged, idx[i].mode);
-
-        char cmd[MAX_PATH_LEN * 2];
-        struct stat st;
-        if (stat(idx[i].path, &st) == 0) {
-            /* diff staged vs working tree */
-            snprintf(cmd, sizeof(cmd),
-                     "diff --label 'a/%s' --label 'b/%s' -u '%s' '%s'",
-                     idx[i].path, idx[i].path,
-                     tmp_staged, idx[i].path);
-        } else {
-            /* File deleted */
-            snprintf(cmd, sizeof(cmd),
-                     "diff --label 'a/%s' --label 'b/%s' -u '%s' /dev/null",
-                     idx[i].path, idx[i].path, tmp_staged);
-        }
-        system(cmd);
-        unlink(tmp_staged);
+ 
+    if (idx_cnt > 0) {
+        for (int i = 0; i < idx_cnt; i++)
+            run_diff(idx[i].path, idx[i].sha1, idx[i].mode, idx[i].path);
+    } else {
+        char head_sha1[SHA1_HEX_SIZE] = "";
+        head_resolve(head_sha1);
+        int committed_cnt;
+        IndexEntry *committed = get_committed_files(head_sha1, &committed_cnt);
+        if (committed_cnt == 0)
+            printf("forge: nothing to diff\n");
+        else
+            for (int i = 0; i < committed_cnt; i++)
+                run_diff(committed[i].path, committed[i].sha1,
+                         committed[i].mode, committed[i].path);
+        free(committed);
     }
     free(idx);
     return 0;
@@ -580,23 +586,16 @@ static int cmd_diff(int argc, char *argv[])
 static int cmd_branch(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
-
-    if (argc == 0) {
-        branch_list();
-        return 0;
-    }
-    if (argc == 2 && strcmp(argv[0], "-d") == 0) {
-        return branch_delete(argv[1]);
-    }
+    if (argc == 0) { branch_list(); return 0; }
+    if (argc == 2 && strcmp(argv[0], "-d") == 0) return branch_delete(argv[1]);
     if (argc == 1) {
         if (branch_create(argv[0], NULL) == 0) {
-            printf("forge: created branch '%s'\n", argv[0]);
+            printf("forge: created branch '\033[1m%s\033[0m'\n", argv[0]);
             return 0;
         }
         return 1;
     }
-    fprintf(stderr, "usage: forge branch [<name>]\n"
-                    "       forge branch -d <name>\n");
+    fprintf(stderr, "usage: forge branch [<n>]\n       forge branch -d <n>\n");
     return 1;
 }
 
@@ -604,64 +603,250 @@ static int cmd_branch(int argc, char *argv[])
 static int cmd_checkout(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
-    if (argc < 1) {
-        fprintf(stderr, "usage: forge checkout <branch>\n");
-        return 1;
+    int create = 0;
+    const char *target = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "-b") == 0) create = 1;
+        else target = argv[i];
     }
-
-    const char *target = argv[0];
-
-    /* Resolve branch */
+    if (!target) {
+        fprintf(stderr, "usage: forge checkout [-b] <branch>\n"); return 1;
+    }
+    if (create && branch_create(target, NULL) != 0) return 1;
+ 
     char sha1[SHA1_HEX_SIZE];
     if (branch_resolve(target, sha1) != 0) {
-        /* Try creating it (forge checkout -b name) */
-        if (argc == 2 && strcmp(argv[0], "-b") == 0) {
-            target = argv[1];
-            if (branch_create(target, NULL) != 0) return 1;
-            if (branch_resolve(target, sha1) != 0) {
-                /* Brand new repo, no commits yet */
-                sha1[0] = '\0';
-            }
-        } else {
-            fprintf(stderr, "forge: branch '%s' not found\n", target);
-            return 1;
-        }
+        fprintf(stderr, "forge: branch '%s' not found\n", target); return 1;
     }
-
-    /* Restore working tree from the commit tree */
     if (sha1[0]) {
         ObjType type; uint8_t *data; size_t dlen;
-        if (obj_read(sha1, &type, &data, &dlen) != 0)
-            die("cannot read commit %s", sha1);
-
-        char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
-        char author[512], message[4096];
-        parse_commit((char *)data, dlen, tree, parent, author, message, sizeof(message));
-        free(data);
-
-        if (tree[0] && tree_checkout(tree, NULL) != 0)
-            fprintf(stderr, "forge: warning: tree restore had errors\n");
+        if (obj_read(sha1, &type, &data, &dlen) == 0 && type == OBJ_COMMIT) {
+            char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
+            char author[512], message[4096];
+            parse_commit((char *)data, dlen, tree, parent, author, message, sizeof(message));
+            free(data);
+            if (tree[0] && tree_checkout(tree, NULL) != 0)
+                fprintf(stderr, "forge: warning: tree restore had errors\n");
+        } else if (data) free(data);
     }
-
-    /* Clear index */
+    head_set_ref(target);
     write_file_str(FORGE_INDEX, "");
-
     printf("Switched to branch '\033[1m%s\033[0m'\n", target);
     return 0;
 }
 
+static int cmd_rm(int argc, char *argv[])
+{
+    if (!is_forge_repo()) die("not a forge repository");
+    if (argc == 0) {
+        fprintf(stderr, "usage: forge rm [--cached] <file> [...]\n"); return 1;
+    }
+    int cached = 0, start = 0;
+    if (strcmp(argv[0], "--cached") == 0) { cached = 1; start = 1; }
+    int rc = 0;
+    for (int i = start; i < argc; i++) {
+        if (index_remove(argv[i]) != 0) {
+            fprintf(stderr, "forge: '%s' not in index\n", argv[i]);
+            rc = 1; continue;
+        }
+        if (!cached && unlink(argv[i]) != 0 && errno != ENOENT) {
+            perror(argv[i]); rc = 1;
+        }
+        printf("  removed: %s\n", argv[i]);
+    }
+    return rc;
+}
+
+static int cmd_reset(int argc, char *argv[])
+{
+    if (!is_forge_repo()) die("not a forge repository");
+    int hard = 0;
+    const char *target_sha1 = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--hard") == 0) hard = 1;
+        else if (strcmp(argv[i], "--soft") == 0) { /* default */ }
+        else target_sha1 = argv[i];
+    }
+    if (!target_sha1) {
+        write_file_str(FORGE_INDEX, "");
+        printf("forge: index cleared (HEAD unchanged)\n");
+        return 0;
+    }
+ 
+    char sha1[SHA1_HEX_SIZE];
+    if (strlen(target_sha1) == SHA1_HEX_LEN)
+        snprintf(sha1, sizeof(sha1), "%s", target_sha1);
+    else if (branch_resolve(target_sha1, sha1) != 0) {
+        fprintf(stderr, "forge: cannot resolve '%s'\n", target_sha1); return 1;
+    }
+ 
+    ObjType type; uint8_t *data; size_t dlen;
+    if (obj_read(sha1, &type, &data, &dlen) != 0 || type != OBJ_COMMIT) {
+        fprintf(stderr, "forge: '%s' is not a commit\n", sha1);
+        if (type && data) free(data); return 1;
+    }
+    if (hard) {
+        char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
+        char author[512], message[4096];
+        parse_commit((char *)data, dlen, tree, parent, author, message, sizeof(message));
+        if (tree[0]) tree_checkout(tree, NULL);
+        write_file_str(FORGE_INDEX, "");
+        printf("forge: hard reset → %s (working tree restored)\n", sha1);
+    } else {
+        printf("forge: soft reset → %s (index preserved)\n", sha1);
+    }
+    free(data);
+    head_advance(sha1);
+    return 0;
+}
+
+static int cmd_tag(int argc, char *argv[])
+{
+    if (!is_forge_repo()) die("not a forge repository");
+    if (argc == 0 || (argc == 1 && strcmp(argv[0], "-l") == 0)) {
+        DIR *d = opendir(".forge/refs/tags");
+        if (!d) { printf("  (no tags)\n"); return 0; }
+        struct dirent *de;
+        while ((de = readdir(d)))
+            if (de->d_name[0] != '.') printf("  %s\n", de->d_name);
+        closedir(d);
+        return 0;
+    }
+    if (argc >= 2 && strcmp(argv[0], "-d") == 0) {
+        char path[MAX_PATH_LEN];
+        snprintf(path, sizeof(path), ".forge/refs/tags/%s", argv[1]);
+        if (unlink(path) != 0) {
+            fprintf(stderr, "forge: tag '%s' not found\n", argv[1]); return 1;
+        }
+        printf("forge: deleted tag '%s'\n", argv[1]); return 0;
+    }
+    /* Create tag */
+    char sha1[SHA1_HEX_SIZE];
+    if (argc >= 2) snprintf(sha1, sizeof(sha1), "%.40s", argv[1]);
+    else if (head_resolve(sha1) != 0 || !sha1[0]) {
+        fprintf(stderr, "forge: no commits yet\n"); return 1;
+    }
+    char ref_path[MAX_PATH_LEN];
+    snprintf(ref_path, sizeof(ref_path), "refs/tags/%s", argv[0]);
+    if (ref_write(ref_path, sha1) != 0) {
+        fprintf(stderr, "forge: failed to create tag '%s'\n", argv[0]); return 1;
+    }
+    printf("forge: tag '\033[1m%s\033[0m' → %.8s...\n", argv[0], sha1);
+    return 0;
+}
+
+static int cmd_clone(int argc, char *argv[])
+{
+    if (argc < 1) {
+        fprintf(stderr, "usage: forge clone <user@host:path> [<dir>]\n");
+        return 1;
+    }
+    const char *url = argv[0];
+    char local_dir[MAX_PATH_LEN];
+    if (argc >= 2) {
+        snprintf(local_dir, sizeof(local_dir), "%s", argv[1]);
+    } else {
+        const char *colon = strchr(url, ':');
+        const char *rpath = colon ? colon + 1 : url;
+        const char *slash = strrchr(rpath, '/');
+        const char *base  = slash ? slash + 1 : rpath;
+        snprintf(local_dir, sizeof(local_dir), "%s", base[0] ? base : "forge_clone");
+    }
+    printf("forge clone: %s → %s\n", url, local_dir);
+ 
+    char user_host[512], rpath[MAX_PATH_LEN];
+    if (remote_parse_url(url, user_host, sizeof(user_host),
+                         rpath, sizeof(rpath)) != 0) return 1;
+ 
+    if (mkdir(local_dir, 0755) != 0) {
+        fprintf(stderr, "forge: '%s' already exists\n", local_dir); return 1;
+    }
+    if (chdir(local_dir) != 0) die("cannot enter '%s'", local_dir);
+ 
+    const char *dirs[] = { FORGE_DIR, FORGE_OBJECTS, FORGE_REFS,
+                            FORGE_HEADS, ".forge/refs/tags", NULL };
+    for (int i = 0; dirs[i]; i++) mkdir(dirs[i], 0755);
+ 
+    write_file_str(FORGE_CONFIG,
+                   "[core]\n    repositoryformatversion = 0\n"
+                   "[user]\n    name  = Anonymous\n    email = anon@forge.local\n");
+ 
+    char cmd[MAX_PATH_LEN * 2];
+    snprintf(cmd, sizeof(cmd),
+             "rsync -az --progress %s:%s/.forge/objects/ %s/",
+             user_host, rpath, FORGE_OBJECTS);
+    printf("  fetching objects...\n");
+    if (system(cmd) != 0) { fprintf(stderr, "forge: rsync failed\n"); return 1; }
+ 
+    snprintf(cmd, sizeof(cmd),
+             "rsync -az %s:%s/.forge/refs/ %s/", user_host, rpath, FORGE_REFS);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "forge: failed to fetch refs\n"); return 1;
+    }
+ 
+    snprintf(cmd, sizeof(cmd), "ssh %s 'cat %s/.forge/HEAD'", user_host, rpath);
+    FILE *pipe = popen(cmd, "r");
+    char head_content[MAX_PATH_LEN] = "ref: refs/heads/main";
+    if (pipe) {
+        if (fgets(head_content, sizeof(head_content), pipe)) rtrim(head_content);
+        pclose(pipe);
+    }
+    write_file_str(FORGE_HEAD, head_content);
+ 
+    char sha1[SHA1_HEX_SIZE] = "";
+    head_resolve(sha1);
+    if (sha1[0]) {
+        ObjType type; uint8_t *data; size_t dlen;
+        if (obj_read(sha1, &type, &data, &dlen) == 0 && type == OBJ_COMMIT) {
+            char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
+            char author[512], message[4096];
+            parse_commit((char *)data, dlen, tree, parent, author, message, sizeof(message));
+            free(data);
+            if (tree[0]) tree_checkout(tree, NULL);
+        } else if (data) free(data);
+    }
+ 
+    write_file_str(FORGE_REMOTES, "");
+    remote_add("origin", url);
+    write_file_str(".forgeignore", "# FORGE ignore\n.forge\n*.o\n*.a\n");
+    write_file_str(FORGE_INDEX, "");
+ 
+    char cwd[MAX_PATH_LEN];
+    if (!getcwd(cwd, sizeof(cwd))) snprintf(cwd, sizeof(cwd), "%s", local_dir);
+    printf("forge: cloned into '\033[1m%s\033[0m'\n", cwd);
+    return 0;
+}
 
 static int cmd_remote(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
-
     if (argc == 0 || (argc == 1 && strcmp(argv[0], "list") == 0)) {
         remote_list(); return 0;
     }
-    if (argc == 3 && strcmp(argv[0], "add") == 0) {
+    if (argc == 3 && strcmp(argv[0], "add") == 0)
         return remote_add(argv[1], argv[2]);
+    if (argc == 2 && strcmp(argv[0], "remove") == 0) {
+        FILE *f = fopen(FORGE_REMOTES, "r");
+        if (!f) { fprintf(stderr, "forge: no remotes\n"); return 1; }
+        char buf[65536]; int blen = 0;
+        char line[MAX_PATH_LEN];
+        while (fgets(line, sizeof(line), f)) {
+            char name[128]; sscanf(line, "%127s", name);
+            if (strcmp(name, argv[1]) != 0) {
+                int n = (int)strlen(line);
+                if (blen + n < (int)sizeof(buf)) {
+                    memcpy(buf + blen, line, (size_t)n); blen += n;
+                }
+            }
+        }
+        fclose(f);
+        f = fopen(FORGE_REMOTES, "w");
+        if (f) { if (fwrite(buf, 1, (size_t)blen, f) != (size_t)blen) {/* ok */} fclose(f); }
+        printf("forge: removed remote '%s'\n", argv[1]);
+        return 0;
     }
-    fprintf(stderr, "usage: forge remote add <name> <url>\n"
+    fprintf(stderr, "usage: forge remote add <n> <url>\n"
+                    "       forge remote remove <n>\n"
                     "       forge remote list\n");
     return 1;
 }
@@ -670,46 +855,180 @@ static int cmd_remote(int argc, char *argv[])
 static int cmd_shoot(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
-
-    const char *remote = (argc > 0) ? argv[0] : "origin";
-    const char *branch = (argc > 1) ? argv[1] : NULL;
-
-    return remote_shoot(remote, branch);
+    return remote_shoot(argc > 0 ? argv[0] : "origin",
+                        argc > 1 ? argv[1] : NULL);
 }
-
-
+ 
 static int cmd_fetch(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
-
-    const char *remote = (argc > 0) ? argv[0] : "origin";
-    const char *branch = (argc > 1) ? argv[1] : NULL;
-
-    return remote_fetch(remote, branch);
+    return remote_fetch(argc > 0 ? argv[0] : "origin",
+                        argc > 1 ? argv[1] : NULL);
 }
 
 
+/* 
+ * forge serve  — minimal TCP object server
+ *
+ * Protocol (line-oriented text over TCP):
+ *   Client sends:
+ *     REFS          → server replies with "REF <refname> <sha1>" lines, then "OK"
+ *     HAVE <sha1>   → client declares it has this object; server replies "OK"
+ *     WANT <sha1>   → client requests this object; server replies "OK"
+ *     DONE          → server sends all WANTed objects not in HAVE set:
+ *                     "OBJ <sha1> <type> <size>\n<raw_bytes>\n"
+ *                     then "OK"
+ *     QUIT          → close connection
+ *  */
+ 
+static void serve_client(int fd)
+{
+    FILE *in  = fdopen(dup(fd), "r");
+    FILE *out = fdopen(dup(fd), "w");
+    if (!in || !out) return;
+ 
+    char wants[1024][SHA1_HEX_SIZE];
+    char haves[1024][SHA1_HEX_SIZE];
+    int  want_cnt = 0, have_cnt = 0;
+    char line[MAX_LINE];
+ 
+    while (fgets(line, sizeof(line), in)) {
+        rtrim(line);
+        if (!line[0]) continue;
+ 
+        if (strcmp(line, "QUIT") == 0) break;
+ 
+        else if (strcmp(line, "REFS") == 0) {
+            /* Send all heads and tags */
+            DIR *d = opendir(FORGE_HEADS);
+            if (d) {
+                struct dirent *de;
+                while ((de = readdir(d))) {
+                    if (de->d_name[0] == '.') continue;
+                    char sha1[SHA1_HEX_SIZE], refname[MAX_PATH_LEN];
+                    snprintf(refname, sizeof(refname), "refs/heads/%s", de->d_name);
+                    if (ref_read(refname, sha1) == 0)
+                        fprintf(out, "REF %s %s\n", refname, sha1);
+                }
+                closedir(d);
+            }
+            DIR *td = opendir(".forge/refs/tags");
+            if (td) {
+                struct dirent *de;
+                while ((de = readdir(td))) {
+                    if (de->d_name[0] == '.') continue;
+                    char sha1[SHA1_HEX_SIZE], refname[MAX_PATH_LEN];
+                    snprintf(refname, sizeof(refname), "refs/tags/%s", de->d_name);
+                    if (ref_read(refname, sha1) == 0)
+                        fprintf(out, "REF %s %s\n", refname, sha1);
+                }
+                closedir(td);
+            }
+            fprintf(out, "OK\n"); fflush(out);
+        }
+        else if (strncmp(line, "HAVE ", 5) == 0 && have_cnt < 1024) {
+            snprintf(haves[have_cnt++], SHA1_HEX_SIZE, "%.40s", line + 5);
+            fprintf(out, "OK\n"); fflush(out);
+        }
+        else if (strncmp(line, "WANT ", 5) == 0 && want_cnt < 1024) {
+            snprintf(wants[want_cnt++], SHA1_HEX_SIZE, "%.40s", line + 5);
+            fprintf(out, "OK\n"); fflush(out);
+        }
+        else if (strcmp(line, "DONE") == 0) {
+            for (int i = 0; i < want_cnt; i++) {
+                int skip = 0;
+                for (int j = 0; j < have_cnt; j++)
+                    if (strcmp(wants[i], haves[j]) == 0) { skip = 1; break; }
+                if (skip) continue;
+ 
+                ObjType type; uint8_t *data; size_t dlen;
+                if (obj_read(wants[i], &type, &data, &dlen) != 0) {
+                    fprintf(out, "ERR object %s not found\n", wants[i]);
+                    fflush(out); continue;
+                }
+                const char *tnames[] = { "", "blob", "tree", "commit" };
+                fprintf(out, "OBJ %s %s %zu\n", wants[i], tnames[type], dlen);
+                fwrite(data, 1, dlen, out);
+                fputc('\n', out); fflush(out);
+                free(data);
+            }
+            fprintf(out, "OK\n"); fflush(out);
+            want_cnt = 0; have_cnt = 0;
+        }
+        else {
+            fprintf(out, "ERR unknown command '%s'\n", line); fflush(out);
+        }
+    }
+    fclose(in); fclose(out);
+}
+ 
+static int cmd_serve(int argc, char *argv[])
+{
+    if (!is_forge_repo()) die("not a forge repository");
+ 
+    int port = 9418;
+    for (int i = 0; i < argc - 1; i++)
+        if (strcmp(argv[i], "--port") == 0)
+            port = atoi(argv[i + 1]);
+ 
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) die("socket: %s", strerror(errno));
+ 
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+ 
+    struct sockaddr_in addr = {0};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port        = htons((uint16_t)port);
+ 
+    if (bind(server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+        die("bind port %d: %s", port, strerror(errno));
+    if (listen(server_fd, 16) < 0)
+        die("listen: %s", strerror(errno));
+ 
+    signal(SIGCHLD, SIG_IGN);   /* auto-reap children */
+ 
+    char cwd[MAX_PATH_LEN];
+    if (!getcwd(cwd, sizeof(cwd))) snprintf(cwd, sizeof(cwd), ".");
+    printf("forge serve: \033[1mlistening on port %d\033[0m\n", port);
+    printf("  repo:  %s\n  Press Ctrl-C to stop.\n\n", cwd);
+ 
+    while (1) {
+        struct sockaddr_in caddr;
+        socklen_t clen = sizeof(caddr);
+        int cfd = accept(server_fd, (struct sockaddr *)&caddr, &clen);
+        if (cfd < 0) continue;
+        printf("  [+] connection from %s\n", inet_ntoa(caddr.sin_addr));
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(server_fd);
+            serve_client(cfd);
+            close(cfd);
+            exit(0);
+        } else if (pid > 0) {
+            close(cfd);
+        } else {
+            serve_client(cfd);
+            close(cfd);
+        }
+    }
+}
+
+// debug 
 static int cmd_cat_obj(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
-    if (argc < 1) {
-        fprintf(stderr, "usage: forge cat-obj <sha1>\n");
-        return 1;
-    }
-
-    const char *sha1 = argv[0];
+    if (argc < 1) { fprintf(stderr, "usage: forge cat-obj <sha1>\n"); return 1; }
     ObjType type; uint8_t *data; size_t len;
-    if (obj_read(sha1, &type, &data, &len) != 0) {
-        fprintf(stderr, "forge: object %s not found\n", sha1);
-        return 1;
+    if (obj_read(argv[0], &type, &data, &len) != 0) {
+        fprintf(stderr, "forge: object %s not found\n", argv[0]); return 1;
     }
-
     const char *names[] = { "", "blob", "tree", "commit" };
-    printf("type:   %s\nsize:   %zu\n\n", names[type], len);
-
+    printf("type: %s\nsize: %zu\n\n", names[type], len);
     if (type == OBJ_TREE) {
         TreeEntry *entries; int cnt;
-        if (tree_read(sha1, &entries, &cnt) == 0) {
+        if (tree_read(argv[0], &entries, &cnt) == 0) {
             for (int i = 0; i < cnt; i++)
                 printf("  %06o  %s  %s\n",
                        entries[i].mode, entries[i].sha1, entries[i].name);
@@ -718,8 +1037,27 @@ static int cmd_cat_obj(int argc, char *argv[])
     } else {
         fwrite(data, 1, len, stdout);
     }
-
     free(data);
+    return 0;
+}
+
+static int cmd_hash_obj(int argc, char *argv[])
+{
+    if (argc < 1) { fprintf(stderr, "usage: forge hash-obj [-w] <file>\n"); return 1; }
+    int store = (strcmp(argv[0], "-w") == 0);
+    const char *file = store ? (argc > 1 ? argv[1] : NULL) : argv[0];
+    if (!file) { fprintf(stderr, "forge hash-obj -w <file>\n"); return 1; }
+    char sha1[SHA1_HEX_SIZE];
+    if (store) {
+        if (!is_forge_repo()) die("not a forge repository");
+        blob_from_file(file, sha1);
+    } else {
+        uint8_t *data; size_t len;
+        if (read_file(file, &data, &len) != 0) { perror(file); return 1; }
+        obj_hash(data, len, OBJ_BLOB, sha1);
+        free(data);
+    }
+    printf("%s\n", sha1);
     return 0;
 }
 
@@ -729,86 +1067,105 @@ static int cmd_list_objects(int argc, char *argv[])
     (void)argc; (void)argv;
     char **sha1s; int cnt;
     if (obj_list_all(&sha1s, &cnt) != 0) return 1;
-    for (int i = 0; i < cnt; i++) {
-        printf("%s\n", sha1s[i]);
-        free(sha1s[i]);
-
-    }
-      free(sha1s);
+    for (int i = 0; i < cnt; i++) { printf("%s\n", sha1s[i]); free(sha1s[i]); }
+    free(sha1s);
     return 0;
-} 
+}
 
 
 static void usage(void)
 {
-    // created by TAAG
     puts(
         "\n"
-        "  ███████╗ ██████╗ ██████╗  ██████╗ ███████╗\n"
-        "  ██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝\n"
-        "  █████╗  ██║   ██║██████╔╝██║  ███╗█████╗  \n"
-        "  ██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  \n"
-        "  ██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗\n"
-        "  ╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝\n"
+        "  \033[1m███████╗ ██████╗ ██████╗  ██████╗ ███████╗\033[0m\n"
+        "  \033[1m██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝\033[0m\n"
+        "  \033[1m█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  \033[0m\n"
+        "  \033[1m██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  \033[0m\n"
+        "  \033[1m██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗\033[0m\n"
+        "  \033[1m╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝\033[0m\n"
         "  Fast, content-addressed version control.\n"
         "\n"
-        "Usage: forge <command> [options]\n"
+        "Usage: \033[1mforge\033[0m <command> [options]\n"
         "\n"
-        "Repository:\n"
-        "  init              Create a new FORGE repository\n"
+        "\033[4mRepository\033[0m\n"
+        "  init                      Create a new FORGE repository\n"
+        "  clone <url> [<dir>]       Clone a remote repository\n"
         "\n"
-        "Working tree:\n"
-        "  put <file> [...]  Stage file(s) for commit      [≡ git add]\n"
-        "  put -a            Stage all files\n"
-        "  status            Show working tree status\n"
-        "  diff              Diff staged vs working tree\n"
+        "\033[4mWorking tree\033[0m\n"
+        "  put <file> [...]          Stage file(s)              \033[90m[≡ git add]\033[0m\n"
+        "  put -a                    Stage all files\n"
+        "  rm [--cached] <file>      Remove file from index (+ disk)\n"
+        "  status                    Show working tree status\n"
+        "  diff                      Show unstaged changes\n"
         "\n"
-        "History:\n"
-        "  msg -m <text>     Record a new commit           [≡ git commit]\n"
-        "  log               Show commit log\n"
-        "  log --oneline     Compact one-line log\n"
-        "  cat-obj <sha1>    Dump raw object (debug)\n"
+        "\033[4mHistory\033[0m\n"
+        "  msg -m <text>             Record a new commit        \033[90m[≡ git commit]\033[0m\n"
+        "  log [--oneline]           Show commit log\n"
+        "  show [<sha1>]             Inspect a commit or object\n"
+        "  reset                     Clear staging area\n"
+        "  reset --soft <sha1>       Move HEAD, keep index\n"
+        "  reset --hard <sha1>       Move HEAD, restore working tree\n"
         "\n"
-        "Branches:\n"
-        "  branch            List branches\n"
-        "  branch <name>     Create a branch\n"
-        "  branch -d <name>  Delete a branch\n"
-        "  checkout <branch> Switch branch\n"
+        "\033[4mBranches & Tags\033[0m\n"
+        "  branch                    List branches\n"
+        "  branch <n>             Create branch\n"
+        "  branch -d <n>          Delete branch\n"
+        "  checkout [-b] <branch>    Switch (or create+switch) branch\n"
+        "  tag [-l]                  List tags\n"
+        "  tag <n> [<sha1>]       Create lightweight tag\n"
+        "  tag -d <n>             Delete tag\n"
         "\n"
-        "Remote (SSH):\n"
-        "  remote add <n> <user@host:path>   Add a named remote\n"
-        "  remote list                       List remotes\n"
-        "  shoot [<remote>]  Push to remote              [≡ git push]\n"
-        "  fetch [<remote>]  Fetch from remote           [≡ git pull]\n"
+        "\033[4mRemote (SSH + rsync)\033[0m\n"
+        "  remote add <n> <url>      Add a named remote\n"
+        "  remote remove <n>         Remove a remote\n"
+        "  remote list               List remotes\n"
+        "  shoot [<remote>]          Push to remote             \033[90m[≡ git push]\033[0m\n"
+        "  fetch [<remote>]          Fetch from remote          \033[90m[≡ git pull]\033[0m\n"
         "\n"
-        "Remote URL format:  user@host:/path/to/repo\n"
-        "Requires:           ssh, rsync (standard on any Linux box)\n"
+        "\033[4mServer\033[0m\n"
+        "  serve [--port <n>]        Serve repo over TCP        \033[90m[≡ git daemon]\033[0m\n"
+        "\n"
+        "\033[4mDebug\033[0m\n"
+        "  cat-obj <sha1>            Dump raw object\n"
+        "  hash-obj [-w] <file>      Hash a file (optionally store)\n"
+        "  list-objects              List all stored objects\n"
+        "\n"
+        "Remote URL:  \033[1muser@host:/path/to/repo\033[0m\n"
+        "Requires:    ssh + rsync (standard on any Linux machine)\n"
     );
 }
 
 int main(int argc, char *argv[])
 {
     if (argc < 2) { usage(); return 1; }
-
-    const char *cmd = argv[1];
-    int  sub_argc = argc - 2;
-    char **sub_argv = argv + 2;
-
+ 
+    const char *cmd  = argv[1];
+    int   sub_argc   = argc - 2;
+    char **sub_argv  = argv + 2;
+ 
     if (!strcmp(cmd, "init"))         return cmd_init(sub_argc, sub_argv);
+    if (!strcmp(cmd, "clone"))        return cmd_clone(sub_argc, sub_argv);
     if (!strcmp(cmd, "put"))          return cmd_put(sub_argc, sub_argv);
     if (!strcmp(cmd, "msg"))          return cmd_msg(sub_argc, sub_argv);
     if (!strcmp(cmd, "status"))       return cmd_status(sub_argc, sub_argv);
     if (!strcmp(cmd, "log"))          return cmd_log(sub_argc, sub_argv);
+    if (!strcmp(cmd, "show"))         return cmd_show(sub_argc, sub_argv);
     if (!strcmp(cmd, "diff"))         return cmd_diff(sub_argc, sub_argv);
     if (!strcmp(cmd, "branch"))       return cmd_branch(sub_argc, sub_argv);
     if (!strcmp(cmd, "checkout"))     return cmd_checkout(sub_argc, sub_argv);
+    if (!strcmp(cmd, "rm"))           return cmd_rm(sub_argc, sub_argv);
+    if (!strcmp(cmd, "reset"))        return cmd_reset(sub_argc, sub_argv);
+    if (!strcmp(cmd, "tag"))          return cmd_tag(sub_argc, sub_argv);
     if (!strcmp(cmd, "remote"))       return cmd_remote(sub_argc, sub_argv);
     if (!strcmp(cmd, "shoot"))        return cmd_shoot(sub_argc, sub_argv);
     if (!strcmp(cmd, "fetch"))        return cmd_fetch(sub_argc, sub_argv);
+    if (!strcmp(cmd, "serve"))        return cmd_serve(sub_argc, sub_argv);
     if (!strcmp(cmd, "cat-obj"))      return cmd_cat_obj(sub_argc, sub_argv);
+    if (!strcmp(cmd, "hash-obj"))     return cmd_hash_obj(sub_argc, sub_argv);
     if (!strcmp(cmd, "list-objects")) return cmd_list_objects(sub_argc, sub_argv);
     if (!strcmp(cmd, "help") || !strcmp(cmd, "--help")) { usage(); return 0; }
-
-    fprintf(stderr, "forge: unknown command '%s'. Run 'forge help'.\n", cmd);
+ 
+    fprintf(stderr, "forge: unknown command '\033[1m%s\033[0m'. "
+                    "Run '\033[1mforge help\033[0m'.\n", cmd);
     return 1;
 }
