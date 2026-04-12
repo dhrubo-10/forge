@@ -2,15 +2,17 @@
 #define FORGE_H
 
 /*
- * Core definitions for FORGE VCS
+ * forge.h — Core definitions for FORGE
  *
- *  Self reminder:
-
- *  commnds:
- *    forge put     -  git add
- *    forge msg     -  git commit
- *    forge shoot   -  git push
- *    forge fetch   -  git pull
+ * Author: Shahriar Dhrubo
+ * Shared types, constants, and utility declarations used across all
+ * FORGE source files. Every .c file includes this as its base header.
+ *
+ * Command vocabulary:
+ *   forge put     — stage files
+ *   forge msg     — commit
+ *   forge shoot   — push over SSH
+ *   forge fetch   — pull over SSH
  */
 
 #include <stdio.h>
@@ -38,22 +40,22 @@
 #define FORGE_REMOTES     ".forge/remotes"
 
 #define SHA1_HEX_LEN   40
-#define SHA1_HEX_SIZE  41   
+#define SHA1_HEX_SIZE  41   /* including null terminator */
 #define SHA1_RAW_SIZE  20
 #define MAX_PATH_LEN   4096
 #define MAX_LINE       8192
 #define MAX_ENTRIES    65536
 
-// File modes (matching POSIX + git conventions) 
-#define MODE_FILE      0100644   // regular file 
-#define MODE_EXEC      0100755   // executable 
-#define MODE_DIR       0040000   // directory / subtree 
-#define MODE_SYMLINK   0120000   //symbolic link 
+/* File modes (matching POSIX + git conventions) */
+#define MODE_FILE      0100644   /* regular file */
+#define MODE_EXEC      0100755   /* executable */
+#define MODE_DIR       0040000   /* directory / subtree */
+#define MODE_SYMLINK   0120000   /* symbolic link */
 
 typedef struct {
     uint32_t mode;
-    char     sha1[SHA1_HEX_SIZE];   // hex SHA-1 of blob 
-    char     path[MAX_PATH_LEN];
+    char     sha1[SHA1_HEX_SIZE];   /* hex SHA-1 of blob */
+    char     path[MAX_PATH_LEN];    /* relative path from repo root */
 } IndexEntry;
 
 typedef enum {
@@ -69,15 +71,15 @@ int   mkdirp(const char *path, mode_t mode);
 int   read_file(const char *path, uint8_t **buf, size_t *len);
 int   write_file(const char *path, const uint8_t *buf, size_t len);
 int   write_file_str(const char *path, const char *str);
-char *read_file_str(const char *path);            
-void  forge_find_root(char *out, size_t size);    
+char *read_file_str(const char *path);            /* returns malloc'd string */
+void  forge_find_root(char *out, size_t size);    /* walk up to find .forge */
 int   is_forge_repo(void);
 
-// newl trimmer
+/* Trim trailing newline */
 static inline void rtrim(char *s) {
     size_t n = strlen(s);
     while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r' || s[n-1] == ' '))
         s[--n] = '\0';
 }
 
-#endif 
+#endif /* FORGE_H */

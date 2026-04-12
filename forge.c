@@ -489,7 +489,6 @@ static int cmd_msg(int argc, char *argv[])
     return 0;
 }
 
-
 static int cmd_status(int argc, char *argv[])
 {
     (void)argc; (void)argv;
@@ -1047,7 +1046,6 @@ static int cmd_fetch(int argc, char *argv[])
     return remote_fetch(argc > 0 ? argv[0] : "origin",
                         argc > 1 ? argv[1] : NULL);
 }
-
 
 /*
  * Minimal TCP object server.

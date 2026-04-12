@@ -1,4 +1,5 @@
-# Required: gcc, zlib (zlib1g-dev on linux)
+# FORGE — Makefile
+# Requires: gcc, zlib (apt install zlib1g-dev on Ubuntu/Debian)
 
 CC      = gcc
 CFLAGS  = -std=c11 -Wall -Wextra -Wshadow -Wpedantic \
