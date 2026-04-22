@@ -1,5 +1,9 @@
 /*
- * Staging area implementation for FORGE
+ * index.c — Staging area
+ *
+ * Author: Shahriar Dhrubo
+ * Manages .forge/index: the set of files staged for the next commit.
+ * Format: one entry per line — <mode>\t<sha1>\t<path>
  */
 
 #include "index.h"
@@ -12,32 +16,69 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+/* Minimal glob: * matches any chars, ? matches one char */
+static int glob_match(const char *pat, const char *str)
+{
+    while (*pat) {
+        if (*pat == '*') {
+            while (*pat == '*') pat++;
+            if (!*pat) return 1;
+            while (*str)
+                if (glob_match(pat, str++)) return 1;
+            return 0;
+        } else if (*pat == '?') {
+            if (!*str) return 0;
+            pat++; str++;
+        } else {
+            if (*pat != *str) return 0;
+            pat++; str++;
+        }
+    }
+    return (*str == '\0');
+}
 
 int is_ignored(const char *path)
 {
-    /* **Always ignore the .forge directory itself */
     if (strncmp(path, ".forge", 6) == 0 &&
         (path[6] == '/' || path[6] == '\0')) return 1;
     if (strncmp(path, "./.forge", 8) == 0) return 1;
 
-    // Read .forgeignore patterns 
     FILE *f = fopen(".forgeignore", "r");
     if (!f) return 0;
+
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
 
     char line[MAX_PATH_LEN];
     while (fgets(line, sizeof(line), f)) {
         rtrim(line);
         if (!line[0] || line[0] == '#') continue;
-        /* Simple prefix/exact match */
-        if (strcmp(path, line) == 0 ||
-            strncmp(path, line, strlen(line)) == 0) {
-            fclose(f); return 1;
+
+        size_t plen = strlen(line);
+
+        /* Trailing slash = directory pattern */
+        if (line[plen - 1] == '/') {
+            line[--plen] = '\0';
+            if (strncmp(path, line, plen) == 0 &&
+                (path[plen] == '/' || path[plen] == '\0'))
+                { fclose(f); return 1; }
+            continue;
         }
+
+        /* Glob wildcard: match against basename */
+        if (strchr(line, '*') || strchr(line, '?')) {
+            if (glob_match(line, basename)) { fclose(f); return 1; }
+            continue;
+        }
+
+        /* Exact or directory-prefix match */
+        if (strcmp(path, line) == 0 ||
+            (strncmp(path, line, plen) == 0 && path[plen] == '/'))
+            { fclose(f); return 1; }
     }
     fclose(f);
     return 0;
 }
-
 
 int index_read(IndexEntry **entries_out, int *count_out)
 {
@@ -45,7 +86,7 @@ int index_read(IndexEntry **entries_out, int *count_out)
     *count_out   = 0;
 
     FILE *f = fopen(FORGE_INDEX, "r");
-    if (!f) return 0;  
+    if (!f) return 0;   /* empty index is fine */
 
     int cap = 256, cnt = 0;
     IndexEntry *entries = malloc((size_t)cap * sizeof(IndexEntry));
@@ -62,7 +103,7 @@ int index_read(IndexEntry **entries_out, int *count_out)
             if (!tmp) { free(entries); fclose(f); return -1; }
             entries = tmp;
         }
-        //Format: mode\tsha1\tpath
+        /* Format: mode\tsha1\tpath */
         unsigned int mode;
         char sha1[SHA1_HEX_SIZE];
         char path[MAX_PATH_LEN];
@@ -112,11 +153,11 @@ int index_add(const char *path)
 
     uint32_t mode = (st.st_mode & S_IXUSR) ? MODE_EXEC : MODE_FILE;
 
-    // this iwll read existing index
+    /* Read existing index */
     IndexEntry *entries; int cnt;
     if (index_read(&entries, &cnt) != 0) return -1;
 
-// Update or append as req
+    /* Update or append */
     int found = 0;
     for (int i = 0; i < cnt; i++) {
         if (strcmp(entries[i].path, path) == 0) {
@@ -140,7 +181,6 @@ int index_add(const char *path)
     printf("  staged: %s\n", path);
     return rc;
 }
-
 
 static int add_recursive(const char *dir)
 {
@@ -177,7 +217,6 @@ int index_add_all(void)
     return add_recursive(".");
 }
 
-
 int index_remove(const char *path)
 {
     IndexEntry *entries; int cnt;
@@ -197,8 +236,6 @@ int index_remove(const char *path)
     free(entries);
     return rc;
 }
-
-
 
 IndexEntry *index_find(IndexEntry *entries, int count, const char *path)
 {
