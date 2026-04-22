@@ -1,5 +1,9 @@
 /*
-Reference management for FORGE
+ * refs.c — Reference management
+ *
+ * Author: Shahriar Dhrubo
+ * Reads and writes HEAD and branch refs under .forge/refs/.
+ * Each ref is a plain text file containing a 40-char SHA-1 hex string.
  */
 
 #include "refs.h"
