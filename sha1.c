@@ -1,7 +1,10 @@
 /*
- * Credit: Steve Reid's SHA-1 
- * adapted by: S.D
- * FORGE: content address all stored objects.
+ * sha1.c — SHA-1 implementation
+ *
+ * Author: Shahriar Dhrubo
+ * Core of FORGE's content-addressed storage. Every blob, tree, and
+ * commit object is identified by the SHA-1 of its serialised form.
+ * Based on Steve Reid's public domain implementation (1995).
  */
 
 #include "sha1.h"

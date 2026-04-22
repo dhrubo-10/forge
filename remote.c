@@ -1,5 +1,9 @@
 /*
- * remote.c — SSH-based remote operations for FORGE
+ * remote.c — Remote transport over SSH
+ *
+ * Author: Shahriar Dhrubo
+ * Implements shoot (push) and fetch (pull) using ssh + rsync.
+ * Named remotes are stored in .forge/remotes as "<name>\t<url>" lines.
  */
 
 #include "remote.h"
