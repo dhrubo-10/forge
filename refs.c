@@ -1,7 +1,7 @@
-/*
- * refs.c — Reference management
+/* refs.c — Reference management
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  *
- * Author: Shahriar Dhrubo
  * Reads and writes HEAD and branch refs under .forge/refs/.
  * Each ref is a plain text file containing a 40-char SHA-1 hex string.
  */

@@ -1,7 +1,7 @@
 /*
- * remote.c — Remote transport over SSH
- *
- * Author: Shahriar Dhrubo
+/* remote.c — SSH remote transport
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  * Implements shoot (push) and fetch (pull) using ssh + rsync.
  * Named remotes are stored in .forge/remotes as "<name>\t<url>" lines.
  */

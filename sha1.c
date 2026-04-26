@@ -1,12 +1,11 @@
-/*
- * sha1.c — SHA-1 implementation
+/* sha1.c — SHA-1 implementation
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  *
- * Author: Shahriar Dhrubo
  * Core of FORGE's content-addressed storage. Every blob, tree, and
- * commit object is identified by the SHA-1 of its serialised form.
+ * commit is identified by the SHA-1 of its serialised form.
  * Based on Steve Reid's public domain implementation (1995).
  */
-
 #include "sha1.h"
 #include <string.h>
 

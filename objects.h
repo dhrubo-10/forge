@@ -1,9 +1,10 @@
-#ifndef OBJECTS_H
-#define OBJECTS_H
-
-/*
- * Content-addressed object store for FORGE
+/* objects.h — Content-addressed object store interface
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  *
+ * Declares the object read/write API for blobs, trees, and commits.
+ * Objects live at .forge/objects/<XX>/<remaining-38-hex-chars>.
+ * 
  * Objects are stored as:
  *   zlib_compress( "<type> <size>\0<raw_content>" )
  * at path:
@@ -11,6 +12,11 @@
  *
  * where <XX> are the first two hex characters of the SHA-1.
  */
+
+
+#ifndef OBJECTS_H
+#define OBJECTS_H
+
 
 #include "forge.h"
 

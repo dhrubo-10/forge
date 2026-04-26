@@ -1,19 +1,14 @@
-#ifndef FORGE_H
-#define FORGE_H
-
-/*
- * forge.h — Core definitions for FORGE
+/* 
+    forge.h — Core definitions for FORGE
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  *
- * Author: Shahriar Dhrubo
  * Shared types, constants, and utility declarations used across all
  * FORGE source files. Every .c file includes this as its base header.
- *
- * Command vocabulary:
- *   forge put     — stage files
- *   forge msg     — commit
- *   forge shoot   — push over SSH
- *   forge fetch   — pull over SSH
  */
+
+#ifndef FORGE_H
+#define FORGE_H
 
 #include <stdio.h>
 #include <stdlib.h>

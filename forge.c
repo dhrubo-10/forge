@@ -1,7 +1,6 @@
-/*
- * forge.c — FORGE Version Control System
- *
- * Author: Shahriar Dhrubo
+/* forge.c — FORGE Version Control System
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  *
  * FORGE is a content-addressed version control system built around
  * SHA-1 object storage, zlib-compressed loose objects, and plain-text

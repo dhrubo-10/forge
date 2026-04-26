@@ -1,16 +1,15 @@
+/*
+/* refs.h — Reference management interface for FORGE
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
+ *
+ * Declares HEAD and branch ref read/write API.
+ * Refs live at .forge/refs/heads/<branch>.
+ */
+
 #ifndef REFS_H
 #define REFS_H
 
-/*
- * refs.h — Reference management for FORGE
- *
- * References are stored as plain text files:
- *   .forge/refs/heads/<branch>  →  contains 40-char SHA-1 hex + newline
- *   .forge/HEAD                 →  "ref: refs/heads/main\n" (symbolic)
- *                                   or "40hexchars\n"        (detached)
- *
- * This mirrors the exact layout git uses for loose refs.
- */
 
 #include "forge.h"
 

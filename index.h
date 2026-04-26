@@ -1,17 +1,17 @@
-#ifndef INDEX_H
-#define INDEX_H
-
-/*
-    Staging area "index" for FORGE
- * The index records which files have been staged  awa "put" for the next commit.
- * Format of .forge/index plain text, one entry per line:
+/* index.h — Staging area interface for FORGE
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  *
- *   <mode_octal>\t<sha1hex>\t<relative_path>\n
- *
+ * Declares the index read/write/add/remove API and the is_ignored()
+ * check. The index file lives at .forge/index.
  * f.e.:
  *   100644	a3f4b2c1...	src/main.c
  *   100644	deadbeef...	README.md
  */
+ 
+
+#ifndef INDEX_H
+#define INDEX_H
 
 #include "forge.h"
 

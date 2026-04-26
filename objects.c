@@ -1,5 +1,9 @@
-/*
- * Content-addressed object store
+/* objects.c — Content-addressed object store
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
+ *
+ * Stores objects as zlib_compress("<type> <size>\0<content>").
+ * Provides blob, tree, and commit read/write primitives.
  */
 
 #include "objects.h"

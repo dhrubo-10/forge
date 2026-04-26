@@ -1,7 +1,8 @@
-#ifndef REMOTE_H
-#define REMOTE_H
-
 /*
+/* remote.h — SSH remote transport interface for FORGE
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
+ *
  * SSH based remote operations for FORGE
  *
  * Remote URLs use the SSH syntax:  user@host:path
@@ -20,6 +21,11 @@
  * Named remotes are stored in .forge/remotes:
  *   <name>\t<url>\n
  */
+
+
+#ifndef REMOTE_H
+#define REMOTE_H
+
 
 #include "forge.h"
 

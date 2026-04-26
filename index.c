@@ -1,9 +1,11 @@
-/*
- * index.c — Staging area
+/**
+ * index.c — Staging area implementation
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
  *
- * Author: Shahriar Dhrubo
  * Manages .forge/index: the set of files staged for the next commit.
  * Format: one entry per line — <mode>\t<sha1>\t<path>
+ *
  */
 
 #include "index.h"

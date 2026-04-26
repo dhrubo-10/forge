@@ -1,3 +1,11 @@
+/* sha1.h — SHA-1 interface for FORGE
+ * Copyright (C) 2026 Shahriar Dhrubo
+ * GNU General Public License v3 — see LICENSE
+ *
+ * Declares the SHA-1 context and hashing functions used by the
+ * content-addressed object store.
+ */
+
 #ifndef SHA1_H
 #define SHA1_H
 
