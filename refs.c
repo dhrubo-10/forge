@@ -39,11 +39,17 @@ static int forge_write_line(const char *relpath, const char *content)
     char *slash = strrchr(dir, '/');
     if (slash) { *slash = '\0'; mkdir(dir, 0755); }
 
-    FILE *f = fopen(full, "w");
-    if (!f) return -1;
-    fprintf(f, "%s\n", content);
-    fclose(f);
-    return 0;
+    LockFile lk;
+    if (lock_file(&lk, full) != 0) return -1;
+
+    char buf[MAX_PATH_LEN + 2];
+    int n = snprintf(buf, sizeof(buf), "%s\n", content);
+    if (lock_write(&lk, buf, (size_t)n) != 0) {
+        rollback_lock(&lk);
+        return -1;
+    }
+
+    return commit_lock(&lk);
 }
 
 

@@ -10,6 +10,8 @@
 
 #include "index.h"
 #include "objects.h"
+#include "lock.h"
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -124,13 +126,20 @@ int index_read(IndexEntry **entries_out, int *count_out)
 
 int index_write(const IndexEntry *entries, int count)
 {
-    FILE *f = fopen(FORGE_INDEX, "w");
-    if (!f) { perror(FORGE_INDEX); return -1; }
-    for (int i = 0; i < count; i++)
-        fprintf(f, "%o\t%s\t%s\n",
-                entries[i].mode, entries[i].sha1, entries[i].path);
-    fclose(f);
-    return 0;
+    LockFile lk;
+    if (lock_file(&lk, FORGE_INDEX) != 0) return -1;
+
+    char line[MAX_PATH_LEN + 128];
+    for (int i = 0; i < count; i++) {
+        int n = snprintf(line, sizeof(line), "%o\t%s\t%s\n",
+                         entries[i].mode, entries[i].sha1, entries[i].path);
+        if (lock_write(&lk, line, (size_t)n) != 0) {
+            rollback_lock(&lk);
+            return -1;
+        }
+    }
+
+    return commit_lock(&lk);
 }
 
 int index_add(const char *path)

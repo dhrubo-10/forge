@@ -7,7 +7,7 @@ CFLAGS  = -std=c11 -Wall -Wextra -Wshadow -Wpedantic \
 LDFLAGS = -lz
 
 TARGET  = forge
-SRCS    = forge.c sha1.c objects.c index.c refs.c remote.c
+SRCS    = forge.c sha1.c objects.c index.c refs.c remote.c lock.c
 OBJS    = $(SRCS:.c=.o)
 
 .PHONY: all clean install uninstall debug
@@ -34,6 +34,7 @@ objects.o: objects.c objects.h forge.h sha1.h
 index.o:   index.c   index.h  forge.h objects.h
 refs.o:    refs.c    refs.h   forge.h
 remote.o:  remote.c  remote.h forge.h refs.h
+lock.o: lock.c lock.h forge.h
 
 install: $(TARGET)
 	cp $(TARGET) $(HOME)/.local/bin/forge
