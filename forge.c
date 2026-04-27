@@ -955,7 +955,8 @@ static int cmd_reset(int argc, char *argv[])
     ObjType type; uint8_t *data; size_t dlen;
     if (obj_read(sha1, &type, &data, &dlen) != 0 || type != OBJ_COMMIT) {
         fprintf(stderr, "forge: '%s' is not a commit\n", sha1);
-        if (data) free(data); return 1;
+        if (data) free(data);
+        return 1;
     }
     if (hard) {
         char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
@@ -1448,7 +1449,8 @@ static int cmd_merge(int argc, char *argv[])
     ObjType type; uint8_t *data; size_t dlen;
     if (obj_read(target_sha1, &type, &data, &dlen) != 0 || type != OBJ_COMMIT) {
         fprintf(stderr, "forge: cannot read target commit\n");
-        if (data) free(data); return 1;
+        if (data) free(data);
+        return 1;
     }
     char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE], author[512], msg[4096];
     parse_commit((char *)data, dlen, tree, parent, author, msg, sizeof(msg));
@@ -1946,7 +1948,8 @@ static int cmd_cherry_pick(int argc, char *argv[])
     ObjType type; uint8_t *data; size_t dlen;
     if (obj_read(pick_sha1, &type, &data, &dlen) != 0 || type != OBJ_COMMIT) {
         fprintf(stderr, "forge: '%s' is not a commit\n", pick_sha1);
-        if (data) free(data); return 1;
+        if (data) free(data);
+        return 1;
     }
 
     char tree[SHA1_HEX_SIZE], parent[SHA1_HEX_SIZE];
@@ -2102,7 +2105,9 @@ static int cmd_shortlog(int argc, char *argv[])
                 if (!authors) die("out of memory");
             }
             snprintf(authors[nauthors].author, 512, "%s", author_clean);
-            snprintf(authors[nauthors].msgs[0], 256, "%s", message);
+            char msg_short[256];
+            snprintf(msg_short, sizeof(msg_short), "%s", message);
+            snprintf(authors[nauthors].msgs[0], 256, "%s", msg_short);
             authors[nauthors].cnt = 1;
             nauthors++;
         }

@@ -93,6 +93,7 @@ static void build_store_buf(const uint8_t *data, size_t len, ObjType type,
     uint8_t *full = malloc(full_len);
     if (!full) { perror("malloc"); exit(1); }
     memcpy(full, hdr, (size_t)hlen + 1);         
+    memcpy(full + (size_t)hlen + 1, data, len); 
     sha1_of_buf(full, full_len, sha1_raw);
     *full_out     = full;
     *full_len_out = full_len;
@@ -228,7 +229,9 @@ int blob_to_file(const char *sha1_hex, const char *filepath, uint32_t mode)
     int perm  = (mode & 0111) ? 0755 : 0644;
     int fd = open(filepath, flags, perm);
     if (fd < 0) { free(data); return -1; }
-    write(fd, data, len);
+    ssize_t written = write(fd, data, len);
+    if (written != (ssize_t)len)
+        fprintf(stderr, "forge: write incomplete for %s\n", filepath);
     close(fd);
     free(data);
     return 0;
@@ -455,7 +458,10 @@ int obj_list_all(char ***sha1s_out, int *count_out)
                 list = tmp;
             }
             char sha1[SHA1_HEX_SIZE];
-            snprintf(sha1, sizeof(sha1), "%s%s", de->d_name, be->d_name);
+            sha1[0] = '\0';
+            strncat(sha1, de->d_name,  2);
+            strncat(sha1, be->d_name, 38);
+            sha1[SHA1_HEX_LEN] = '\0';
             list[cnt++] = strdup(sha1);
         }
         closedir(bd);

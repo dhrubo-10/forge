@@ -7,6 +7,7 @@
  */
 
 #include "refs.h"
+#include "lock.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
