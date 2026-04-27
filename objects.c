@@ -136,9 +136,17 @@ int obj_write(const uint8_t *data, size_t len, ObjType type,
         return (errno == EEXIST) ? 0 : -1;
     }
     if (write(fd, compressed, comp_len) != (ssize_t)comp_len) {
-        close(fd); free(compressed); return -1;
+        close(fd); unlink(path); free(compressed); return -1;
     }
+    fsync(fd);
     close(fd);
+
+    /* fsync the parent dir so the new file is visible after a crash!. */
+    char obj_dir[MAX_PATH_LEN];
+    snprintf(obj_dir, sizeof(obj_dir), "%s/%.2s", FORGE_OBJECTS, sha1_out);
+    int dfd = open(obj_dir, O_RDONLY);
+    if (dfd >= 0) { fsync(dfd); close(dfd); }
+
     free(compressed);
     return 0;
 }

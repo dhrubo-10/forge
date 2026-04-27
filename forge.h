@@ -77,4 +77,10 @@ static inline void rtrim(char *s) {
         s[--n] = '\0';
 }
 
+/* Run a cmd via fork+execvp. argv must be null-terminated. */
+int run_cmd(const char *const argv[]);
+
+/* Same same but diff cause it captures stdout into buf. */
+int run_cmd_capture(const char *const argv[], char *buf, size_t buf_sz);
+
 #endif /* FORGE_H */

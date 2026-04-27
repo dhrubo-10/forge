@@ -54,6 +54,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -2275,6 +2276,55 @@ static void usage(void)
         "Remote URL: \033[1muser@host:/path/to/repo\033[0m\n"
         "Requires:   ssh + rsync\n"
     );
+}
+
+int run_cmd(const char *const argv[])
+{
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "forge: fork failed: %s\n", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        execvp(argv[0], (char *const *)argv);
+        fprintf(stderr, "forge: exec '%s' failed: %s\n", argv[0], strerror(errno));
+        _exit(127);
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
+}
+
+int run_cmd_capture(const char *const argv[], char *buf, size_t buf_sz)
+{
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return -1; }
+
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    size_t total = 0;
+    ssize_t n;
+    while (total < buf_sz - 1 &&
+           (n = read(pipefd[0], buf + total, buf_sz - 1 - total)) > 0)
+        total += (size_t)n;
+    buf[total] = '\0';
+    close(pipefd[0]);
+
+    int status;
+    waitpid(pid, &status, 0);
+    rtrim(buf);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 int main(int argc, char *argv[])
