@@ -1,5 +1,4 @@
-/*
-/* refs.h — Reference management interface for FORGE
+/* refs.h - Reference management interface for FORGE
  * Copyright (C) 2026 Shahriar Dhrubo
  * GNU General Public License v3 — see LICENSE
  *

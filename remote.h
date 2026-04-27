@@ -1,5 +1,4 @@
-/*
-/* remote.h — SSH remote transport interface for FORGE
+/* remote.h - SSH remote transport interface for FORGE
  * Copyright (C) 2026 Shahriar Dhrubo
  * GNU General Public License v3 — see LICENSE
  *
