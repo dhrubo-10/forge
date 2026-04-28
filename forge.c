@@ -312,6 +312,7 @@ static IndexEntry *get_committed_files(const char *commit_sha, int *cnt_out)
     return committed;
 }
 
+/* init: create a new .forge/ repository */
 static int cmd_init(int argc, char *argv[])
 {
     const char *dir = (argc > 0) ? argv[0] : ".";
@@ -358,7 +359,7 @@ static int cmd_init(int argc, char *argv[])
     return 0;
 }
 
-
+/* put: stage files into the index */
 static int cmd_put(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -377,7 +378,7 @@ static int cmd_put(int argc, char *argv[])
     return rc;
 }
 
-
+/* msg: record a new commit from staged files */
 static int cmd_msg(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -489,7 +490,7 @@ static int cmd_msg(int argc, char *argv[])
     return 0;
 }
 
-
+/* status: show staged, modified, untracked andfor deleted files */
 static int cmd_status(int argc, char *argv[])
 {
     (void)argc; (void)argv;
@@ -605,8 +606,10 @@ static void format_timestamp(const char *author_str, char *out, size_t size)
     strftime(out, size, "%a %b %d %H:%M:%S %Y %z", tm_info);
 }
 
+/* log --graph: ASCII branch graph alongside one-line log */
 static int cmd_log_graph(void); /* forward decl */
 
+/* log: walk commit history and print it */
 static int cmd_log(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -650,6 +653,8 @@ static int cmd_log(int argc, char *argv[])
     }
     return 0;
 }
+
+/* show: inspect a commit, blob or tree object */
 
 static int cmd_show(int argc, char *argv[])
 {
@@ -737,6 +742,7 @@ static void run_diff(const char *label, const char *blob_sha,
     unlink(tmp);
 }
 
+/* diff: compare working tree or staged changes against HEAD */
 static int cmd_diff(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -832,7 +838,7 @@ static int cmd_diff(int argc, char *argv[])
     return 0;
 }
 
-
+/* branch: list, create r delete branches */
 static int cmd_branch(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -850,7 +856,9 @@ static int cmd_branch(int argc, char *argv[])
     return 1;
 }
 
-
+/**
+ *  checkout: switch branch and restore working tree 
+ * */
 static int cmd_checkout(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -899,6 +907,7 @@ static int cmd_checkout(int argc, char *argv[])
 }
 
 
+/* rm: remove a file from the index and optionally from disk */
 static int cmd_rm(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -922,7 +931,7 @@ static int cmd_rm(int argc, char *argv[])
     return rc;
 }
 
-
+/* reset: move HEAD, optionally restore working tree */
 static int cmd_reset(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -981,7 +990,7 @@ static int cmd_reset(int argc, char *argv[])
     return 0;
 }
 
-
+/* tag: create, list or delete lightweight tags */
 static int cmd_tag(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -1023,7 +1032,7 @@ static int cmd_tag(int argc, char *argv[])
     return 0;
 }
 
-
+/* clone: copy a remote repository over SSH */
 static int cmd_clone(int argc, char *argv[])
 {
     if (argc < 1) {
@@ -1120,7 +1129,7 @@ static int cmd_clone(int argc, char *argv[])
     return 0;
 }
 
-
+/* remote: add, remove or list named remotes */
 static int cmd_remote(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -1160,6 +1169,10 @@ static int cmd_remote(int argc, char *argv[])
 }
 
 
+/**
+ *  the shoot!: push current branch to a remote over SSH + rsync 
+ * ! Future plan is to convert it to go, instead of forge shoot, just type go and it should work.
+ * */
 static int cmd_shoot(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -1167,6 +1180,10 @@ static int cmd_shoot(int argc, char *argv[])
                         argc > 1 ? argv[1] : NULL);
 }
 
+/**
+ *  fetch: pull objects and refs from a remote over SSH + rsync 
+ *  Same as shoot. But not sure about the name YET.
+ * */
 static int cmd_fetch(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -1269,6 +1286,7 @@ static void serve_client(int fd)
     fclose(in); fclose(out);
 }
 
+/* serve: listen on TCP and serve objects to clients */
 static int cmd_serve(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -1322,7 +1340,7 @@ static int cmd_serve(int argc, char *argv[])
     }
 }
 
-
+/* cat-obj: dump the raw content of an object by SHA-1 */
 static int cmd_cat_obj(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -1348,6 +1366,7 @@ static int cmd_cat_obj(int argc, char *argv[])
     return 0;
 }
 
+/* hash-obj: hash a file as a blob, optionally write to store */
 static int cmd_hash_obj(int argc, char *argv[])
 {
     if (argc < 1) { fprintf(stderr, "usage: forge hash-obj [-w] <file>\n"); return 1; }
@@ -1368,6 +1387,8 @@ static int cmd_hash_obj(int argc, char *argv[])
     return 0;
 }
 
+
+/* list-objects: print all SHA-1s in the object store */
 static int cmd_list_objects(int argc, char *argv[])
 {
     (void)argc; (void)argv;
@@ -1378,7 +1399,7 @@ static int cmd_list_objects(int argc, char *argv[])
     return 0;
 }
 
-/* Fast-forward only. Refuses if branches have diverged. */
+/* merge: Fast forward merge a branch into HEAD */
 
 static int cmd_merge(int argc, char *argv[])
 {
@@ -1473,7 +1494,7 @@ static int cmd_merge(int argc, char *argv[])
     return 0;
 }
 
-
+/* config: get or set values in .forge/config */
 static int cmd_config(int argc, char *argv[])
 {
     if (!is_forge_repo()) die("not a forge repository");
@@ -1537,7 +1558,7 @@ static int cmd_config(int argc, char *argv[])
     return 0;
 }
 
-
+/* ls-files: list all files tracked in HEAD */
 static int cmd_ls_files(int argc, char *argv[])
 {
     (void)argc; (void)argv;
@@ -1574,7 +1595,7 @@ static int cmd_stash(int argc, char *argv[])
     int do_list = (argc > 0 && strcmp(argv[0], "list") == 0);
     int do_drop = (argc > 0 && strcmp(argv[0], "drop") == 0);
 
-    /* ── list ── */
+   
     if (do_list) {
         FILE *f = fopen(stash_path, "r");
         if (!f) { printf("  (no stash)\n"); return 0; }
@@ -1588,14 +1609,14 @@ static int cmd_stash(int argc, char *argv[])
         return 0;
     }
 
-    /* ── drop ── */
+   
     if (do_drop) {
         if (unlink(stash_path) == 0) printf("forge: stash dropped\n");
         else fprintf(stderr, "forge: no stash to drop\n");
         return 0;
     }
 
-    /* ── pop ── */
+    
     if (do_pop) {
         FILE *f = fopen(stash_path, "r");
         if (!f) { fprintf(stderr, "forge: no stash to pop\n"); return 1; }
@@ -1658,7 +1679,7 @@ static int cmd_stash(int argc, char *argv[])
         return 0;
     }
 
-    /* ── save (default) ── */
+   
     char head_sha1[SHA1_HEX_SIZE] = "";
     head_resolve(head_sha1);
     int committed_cnt;
@@ -1803,7 +1824,7 @@ static int cmd_restore(int argc, char *argv[])
     free(snapshot); free(files);
     return rc;
 }
-/* Rename a tracked file: move the file on disk, update the index. */
+/* mv: Rename a tracked file: move the file on disk, update the index. */
 
 static int cmd_mv(int argc, char *argv[])
 {
@@ -1858,7 +1879,7 @@ static int cmd_mv(int argc, char *argv[])
     return 0;
 }
 
-/* Search for a pattern in all tracked files (working tree versions). */
+/* grep: Search for a pattern in all tracked files (working tree versions). */
 
 static int cmd_grep(int argc, char *argv[])
 {
@@ -1929,7 +1950,7 @@ static int cmd_grep(int argc, char *argv[])
     return 0;
 }
 
-/* Apply the changes introduced by a specific commit onto HEAD. */
+/* cherry-pick: Apply the changes introduced by a specific commit onto HEAD. */
 
 static int cmd_cherry_pick(int argc, char *argv[])
 {
@@ -2052,7 +2073,7 @@ static int cmd_cherry_pick(int argc, char *argv[])
     return 0;
 }
 
-/* Summarise commit count and messages grouped by author. */
+/* shortlog: Summarise commit count and messages grouped by author. */
 
 static int cmd_shortlog(int argc, char *argv[])
 {
