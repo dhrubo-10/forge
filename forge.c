@@ -2204,6 +2204,11 @@ static int cmd_log_graph(void)
 
 static void usage(void)
 {
+    /* 
+        FOr people who've been asking how i did this
+        https://patorjk.com/software/taag/#p=display&f=Graffiti&t=&x=none&v=4&h=4&w=80&we=false
+        go to this link and generate.
+     */
     puts(
         "\n"
         "  \033[1m███████╗ ██████╗ ██████╗  ██████╗ ███████╗\033[0m\n"
