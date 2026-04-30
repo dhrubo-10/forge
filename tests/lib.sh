@@ -1,6 +1,10 @@
 #!/bin/bash
 # tests/lib.sh - just a test env
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FORGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FORGE_BIN="$FORGE_ROOT/forge"
+
 PASS=0
 FAIL=0
 SKIP=0
@@ -9,6 +13,7 @@ TEST_DIR=""
 setup_repo() {
     TEST_DIR=$(mktemp -d)
     cd "$TEST_DIR" || exit 1
+    export PATH="$FORGE_ROOT:$PATH"
 }
 
 teardown_repo() {
