@@ -30,14 +30,13 @@ test_output_contains "log shows commit message" \
     "forge log --oneline" \
     "initial commit"
 
-test_expect_success "msg with no staged files fails" "
-    forge msg -m 'empty' 2>&1 | grep -q 'nothing'
-"
-
 test_expect_success "put -a stages multiple files" "
     echo 'int x;' > a.c &&
     echo 'int y;' > b.c &&
-    forge put -a &&
+    forge put -a
+"
+
+test_expect_success "msg commits multiple files" "
     forge msg -m 'add a and b'
 "
 
@@ -45,6 +44,10 @@ test_output_contains "log shows second commit" \
     "forge log --oneline" \
     "add a and b"
 
+test_expect_success "msg with nothing new to commit fails" "
+    forge reset >/dev/null 2>&1 &&
+    forge msg -m 'empty' 2>&1 | grep -q 'nothing'
+"
 teardown_repo
 
 print_results
