@@ -24,7 +24,7 @@ $(TARGET): $(OBJS)
 	@echo ""
 
 $(OBJDIR)/%.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 debug: CFLAGS += -g3 -DDEBUG -fsanitize=address,undefined
 debug: LDFLAGS += -fsanitize=address,undefined
@@ -37,6 +37,12 @@ $(OBJDIR)/index.o:   index.c   index.h  forge.h objects.h
 $(OBJDIR)/refs.o:    refs.c    refs.h   forge.h
 $(OBJDIR)/remote.o:  remote.c  remote.h forge.h refs.h
 $(OBJDIR)/lock.o:    lock.c    lock.h   forge.h
+
+test:
+	@bash tests/run_tests.sh
+
+memcheck: $(TARGET)
+	@FORGE_VALGRIND=1 bash tests/run_tests.sh
 
 install: $(TARGET)
 	cp $(TARGET) $(HOME)/.local/bin/forge
