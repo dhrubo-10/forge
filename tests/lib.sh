@@ -1,10 +1,9 @@
 #!/bin/bash
-# tests/lib.sh - just a test env
+# tests/lib.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FORGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FORGE_BIN="$FORGE_ROOT/forge"
-
 PASS=0
 FAIL=0
 SKIP=0
@@ -12,8 +11,9 @@ TEST_DIR=""
 
 setup_repo() {
     TEST_DIR=$(mktemp -d)
+    cp "$FORGE_BIN" "$TEST_DIR/forge"
     cd "$TEST_DIR" || exit 1
-    export PATH="$FORGE_ROOT:$PATH"
+    export PATH="$TEST_DIR:$PATH"
 }
 
 teardown_repo() {
@@ -66,4 +66,8 @@ print_results() {
     echo ""
     printf "  passed: \033[32m%d\033[0m  failed: \033[31m%d\033[0m\n" "$PASS" "$FAIL"
     echo ""
+}
+
+forge_head_sha() {
+    forge log | sed 's/\x1b\[[0-9;]*m//g' | grep "^commit" | head -1 | awk '{print $2}'
 }
