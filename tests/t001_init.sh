@@ -2,6 +2,7 @@
 # tests/t001_init.sh: forge init tests
 
 . "$(dirname "$0")/lib.sh"
+export PATH="$FORGE_ROOT:$PATH"
 
 echo "forge init"
 

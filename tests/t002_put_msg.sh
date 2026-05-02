@@ -2,6 +2,7 @@
 # tests/t002_put_msg.sh: forge put and forge msg tests
 
 . "$(dirname "$0")/lib.sh"
+export PATH="$FORGE_ROOT:$PATH"
 
 echo "forge put + forge msg"
 

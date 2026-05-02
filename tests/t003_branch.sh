@@ -2,6 +2,7 @@
 # tests/t003_branch.sh: forge branch and forge checkout tests
 
 . "$(dirname "$0")/lib.sh"
+export PATH="$FORGE_ROOT:$PATH"
 
 echo "forge branch + forge checkout"
 
