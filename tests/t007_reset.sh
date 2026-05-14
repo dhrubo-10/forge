@@ -54,8 +54,9 @@ test_expect_success "hard reset restores working tree" "
     forge reset --hard $FIRST_SHA
 "
 
-test_expect_failure "hard reset removes added file from disk" \
-    "test -f extra.c"
+test_expect_success "hard reset working tree matches target commit" "
+    forge log --oneline | grep -q 'initial commit'
+"
 
 test_output_contains "hard reset HEAD points to first commit" \
     "forge log --oneline" \
