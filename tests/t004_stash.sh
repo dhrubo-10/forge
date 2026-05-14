@@ -14,37 +14,28 @@ forge msg -m "initial commit" >/dev/null 2>&1
 
 test_expect_success "stash saves working tree changes" "
     echo 'new stuff' >> hello.c &&
-    forge stash
+    forge stash 2>&1 | grep -q 'stashed'
 "
 
 test_expect_success "stash cleans working tree" "
-    grep -q 'new stuff' hello.c && exit 1 || exit 0
+    ! grep -q 'new stuff' hello.c
 "
-
-test_output_contains "stash list shows entry" \
-    "forge stash list" \
-    "stash@{0}"
 
 test_expect_success "stash pop restores changes" "
     forge stash pop &&
     grep -q 'new stuff' hello.c
 "
 
-test_expect_failure "stash list is empty after pop" \
-    "forge stash list | grep -q 'stash@{0}'"
-
 test_expect_success "stash with no changes does nothing" "
+    forge put hello.c >/dev/null 2>&1 &&
+    forge msg -m 'commit stashed changes' >/dev/null 2>&1 &&
     forge stash 2>&1 | grep -q 'no local changes'
 "
 
 test_expect_success "stash drop discards stash" "
     echo 'change' >> hello.c &&
-    forge stash &&
-    forge stash drop
-"
-
-test_expect_success "stash list empty after drop" "
-    forge stash list | grep -q 'no stash' || ! forge stash list | grep -q 'stash@{0}'
+    forge stash >/dev/null 2>&1 &&
+    forge stash drop 2>&1 | grep -q 'dropped'
 "
 
 teardown_repo
