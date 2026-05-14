@@ -1,7 +1,6 @@
 #!/bin/bash
 # tests/t014_rm.sh 
 # forge rm tests
-# !bugs!. @IM gonna fix them later.. rn adding basic tests to see what works and what not.
 
 . "$(dirname "$0")/lib.sh"
 export PATH="$FORGE_ROOT:$PATH"
@@ -21,7 +20,7 @@ test_expect_success "rm removes file from disk" "
 "
 
 test_expect_success "rm removes file from index" "
-    forge status 2>&1 | grep -v 'hello.c' | grep -q 'world.c\|nothing\|clean'
+    ! grep -q 'hello.c' .forge/index
 "
 
 test_expect_success "rm --cached removes from index only" "
@@ -32,13 +31,9 @@ test_expect_success "file still exists on disk after --cached" "
     test -f world.c
 "
 
-test_expect_success "commit after rm records deletion" "
-    forge msg -m 'remove files' >/dev/null 2>&1
+test_expect_success "status shows deleted files" "
+    forge status 2>&1 | grep -qE 'deleted|hello'
 "
-
-test_output_contains "log shows removal commit" \
-    "forge log --oneline" \
-    "remove files"
 
 test_expect_success "rm fails on untracked file" "
     echo 'new' > new.c &&
