@@ -34,9 +34,10 @@ test_expect_success "restore works after multiple commits" "
     grep -q 'second version' hello.c
 "
 
+FIRST=$(forge log | sed 's/\x1b\[[0-9;]*m//g' | grep "^commit" | tail -1 | awk '{print $2}')
+
 test_expect_success "restore --source restores from specific commit" "
-    FIRST=\$(forge log --oneline | tail -1 | awk '{print \$1}') &&
-    forge restore --source \$FIRST hello.c &&
+    forge restore --source $FIRST hello.c &&
     grep -q 'original content' hello.c
 "
 
