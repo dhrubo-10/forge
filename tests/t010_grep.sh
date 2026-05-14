@@ -21,8 +21,8 @@ test_output_contains "grep finds pattern across files" \
     "main.c"
 
 test_output_contains "grep -n shows line numbers" \
-    "forge grep -n main" \
-    ":1:"
+    "forge grep -n main | sed 's/\x1b\[[0-9;]*m//g'" \
+    "main.c:1:int"
 
 test_expect_success "grep -i is case insensitive" "
     forge grep -i MAIN 2>&1 | grep -q 'main.c'
